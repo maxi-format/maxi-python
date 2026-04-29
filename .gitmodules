@@ -1,0 +1,3 @@
+[submodule "maxi-testdata"]
+	path = maxi-testdata
+	url = ../maxi-testdata
