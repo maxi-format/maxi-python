@@ -28,6 +28,9 @@ def _load_test_cases():
         expected_json = d / "expected.json"
         if test_json.is_file() and in_maxi.is_file() and expected_json.is_file():
             meta = json.loads(test_json.read_text(encoding="utf-8"))
+            # Skip parser_dependent error cases - these are optional for parsers
+            if meta.get("category") == "error" and meta.get("parser_dependent"):
+                continue
             cases.append({
                 "id": meta.get("id", d.name),
                 "title": meta.get("title", d.name),

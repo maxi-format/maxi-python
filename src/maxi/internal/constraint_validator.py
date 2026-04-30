@@ -69,9 +69,18 @@ def _validate_annotation_type_compat(
     if not field.annotation:
         return
     allowed = _ANNOTATION_TYPE_MAP.get(field.annotation)
-    if allowed is None:
-        return
     base = _get_base_type_name(field.type_expr)
+    if allowed is None:
+        # Unknown annotation: if applied to bytes, it's an unsupported binary format
+        if base == "bytes":
+            raise MaxiError(
+                f"Unsupported binary format annotation '@{field.annotation}' for "
+                f"bytes field '{field.name}' in type '{type_alias}'. "
+                f"Only @base64 and @hex are supported.",
+                MaxiErrorCode.UnsupportedBinaryFormatError,
+                filename=filename,
+            )
+        return
     if base is None:
         return
     if base not in allowed:

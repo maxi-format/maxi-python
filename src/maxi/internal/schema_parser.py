@@ -150,7 +150,7 @@ class SchemaParser:
         looks_alias_paren = bool(re.match(r"^[A-Za-z_][A-Za-z0-9_-]*\s*\(", trimmed))
         looks_explicit = bool(
             re.match(
-                r"^[A-Za-z_][A-Za-z0-9_-]*\s*:\s*[A-Za-z][A-Za-z0-9_-]*\s*(<[^>]+>)?\s*\(",
+                r"^[A-Za-z_][A-Za-z0-9_-]*\s*:\s*[A-Za-z_][A-Za-z0-9_-]*\s*(<[^>]+>)?\s*\(",
                 trimmed,
             )
         )
@@ -267,7 +267,7 @@ class SchemaParser:
         fields_str = trimmed[open_idx + 1 : close_idx].strip()
 
         header_m = re.match(
-            r"^([A-Za-z_][A-Za-z0-9_-]*)(?::([A-Za-z][A-Za-z0-9_-]*))?(?:<\s*([^>]+?)\s*>)?\s*$",
+            r"^([A-Za-z_][A-Za-z0-9_-]*)(?::([A-Za-z_][A-Za-z0-9_-]*))?(?:<\s*([^>]+?)\s*>)?\s*$",
             header,
         )
         if not header_m:
@@ -387,6 +387,11 @@ class SchemaParser:
             default_value = name_part[eq_idx + 1 :].strip()
             has_default = True
             name_part = name_part[:eq_idx].strip()
+            if not constraints:
+                trailing2 = self._extract_trailing_group(name_part, "(", ")")
+                if trailing2:
+                    constraints = self._parse_constraints(trailing2["inner"], line_number)
+                    name_part = trailing2["before"].strip()
         elif rest_part:
             eq_idx = self._find_top_level_char(rest_part, "=")
             if eq_idx != -1:

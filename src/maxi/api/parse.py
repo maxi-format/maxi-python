@@ -122,7 +122,23 @@ def _split_sections(input: str) -> tuple[str, str | None]:
         has_inherit = bool(
             re.search(r"^[ \t]*[A-Za-z_][A-Za-z0-9_-]*[ \t]*<[^>]+>[ \t]*\(", input, re.MULTILINE)
         )
-        if has_directive or has_explicit or has_inherit:
+        if has_explicit or has_inherit:
+            return (input, None)
+        if has_directive:
+            # File has directives (e.g. @schema) but no inline type definitions.
+            # Find where data records begin. A data record starts with Alias( where
+            # the first value character is a digit, quote, ~, [, {, (, or minus+digit.
+            _record_start = re.compile(
+                r"^[ \t]*([A-Za-z_][A-Za-z0-9_-]*)[ \t]*\([ \t]*"
+                r'(?:[\d"~\[\{(]|-\d)',
+                re.MULTILINE
+            )
+            rec_m = _record_start.search(input)
+            if rec_m:
+                split_pos = rec_m.start()
+                schema_part = input[:split_pos].strip()
+                records_part = input[split_pos:].strip()
+                return (schema_part, records_part or None)
             return (input, None)
         return ("", input)
 

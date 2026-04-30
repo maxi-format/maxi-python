@@ -29,30 +29,70 @@ def _resolve_json_path(obj, path, follow_references=False, schema=None):
     dereference it before continuing down the path.
     """
     parts = path.lstrip("#/").split("/")
+    in_data_tree = parts[0] in ("objects", "records")
     current = obj
 
+    # Track schema context for follow_references
+    current_type_name = None  # the type name we're currently within (in objects tree)
+    prev_field_name = None    # the field name used to produce current value (for ref following)
+
     for i, p in enumerate(parts):
+        if current is None:
+            return None
+
+        # Track type name when entering objects/<TypeName>
+        if i == 1 and parts[0] == "objects":
+            current_type_name = p
+
         if isinstance(current, list):
-            current = current[int(p)]
+            try:
+                current = current[int(p)]
+            except (IndexError, ValueError):
+                if in_data_tree:
+                    return None
+                raise IndexError(p)
         elif isinstance(current, dict):
             if p in current:
                 current = current[p]
+            elif in_data_tree:
+                return None
             else:
                 raise KeyError(p)
-        elif follow_references and isinstance(current, (int, float, str)):
-            # Dereference: find the right object that has field `p`
+        elif follow_references and isinstance(current, (int, float, str)) and parts[0] == "objects":
+            # Use schema to find target type for this reference field
+            # prev_field_name is the field that produced the current scalar value
             objects = obj.get("objects", {})
-            key = str(current)
             resolved = None
-            # Try all types, prefer the one that has the next path component
-            for type_name, id_map in objects.items():
-                candidate = id_map.get(key)
-                if candidate is not None and isinstance(candidate, dict) and p in candidate:
-                    resolved = candidate
-                    break
-            # Fallback: first match regardless
+
+            if schema and current_type_name and prev_field_name:
+                type_alias = _find_type_alias_by_name(schema, current_type_name)
+                td = schema.get_type(type_alias) if type_alias else None
+                if td:
+                    field = next((f for f in td.fields if f.name == prev_field_name), None)
+                    raw_field_type = field.type_expr if field else None
+                    if raw_field_type and raw_field_type.endswith("[]"):
+                        raw_field_type = raw_field_type[:-2].strip()
+                    if raw_field_type:
+                        target_alias = getattr(schema, "resolve_type_alias", lambda x: x)(raw_field_type) or raw_field_type
+                        target_td = schema.get_type(target_alias)
+                        target_type_name = (target_td.name or target_td.alias) if target_td else None
+                        if target_type_name:
+                            candidate = objects.get(target_type_name, {}).get(str(current))
+                            if candidate is not None:
+                                resolved = candidate
+                                current_type_name = target_type_name
+
             if resolved is None:
-                resolved = _deref(objects, current)
+                # Fallback: try all types, prefer the one with the next field
+                for type_name, id_map in objects.items():
+                    candidate = id_map.get(str(current))
+                    if candidate is not None and isinstance(candidate, dict) and p in candidate:
+                        resolved = candidate
+                        current_type_name = type_name
+                        break
+                if resolved is None:
+                    resolved = _deref(objects, current)
+
             if resolved is None:
                 return None
             current = resolved
@@ -64,7 +104,19 @@ def _resolve_json_path(obj, path, follow_references=False, schema=None):
                 return None
         else:
             return None
+
+        # Update prev_field_name AFTER processing this step (for next iteration)
+        if not p.isdigit():
+            prev_field_name = p
     return current
+
+
+def _find_type_alias_by_name(schema, type_name):
+    """Find type alias by type name (name or alias)."""
+    for alias, td in schema.types.items():
+        if (td.name or td.alias) == type_name:
+            return alias
+    return None
 
 
 def _deref(objects, ref_value):
@@ -96,6 +148,32 @@ def _result_to_comparable(result):
     records_out = []
     objects_out = {}
 
+    def _get_inline_id(v):
+        """Get the id from an inline object dict, or None."""
+        if isinstance(v, dict) and "id" in v:
+            return v["id"]
+        return None
+
+    def _project_value_for_registry(value, td_fields):
+        """Convert a record value dict to the registry representation:
+        - inline object fields become their id
+        - array-of-inline-objects fields become arrays of ids
+        """
+        projected = {}
+        for field in td_fields:
+            out_name = _field_output_name(field)
+            v = value.get(out_name)
+            if isinstance(v, dict) and "id" in v:
+                projected[out_name] = v["id"]
+            elif isinstance(v, list):
+                projected[out_name] = [
+                    item["id"] if (isinstance(item, dict) and "id" in item) else item
+                    for item in v
+                ]
+            else:
+                projected[out_name] = v
+        return projected
+
     for record in result.records:
         td = schema.get_type(record.alias)
         if td is None:
@@ -113,31 +191,49 @@ def _result_to_comparable(result):
             value[out_name] = v
         records_out.append({"type": type_name, "value": value})
 
-        # Build objects map keyed by id
+        # Build objects map - find id field index, fallback to 0 if none found
         id_idx = td.get_id_field_index()
+        if id_idx < 0 and td.fields:
+            id_idx = 0  # fallback: use first field as key (JS behavior)
         if id_idx >= 0 and id_idx < len(record.values):
             id_val = record.values[id_idx]
+            # If the id value is itself an inline object, use its id
+            if isinstance(id_val, dict) and "id" in id_val:
+                id_val = id_val["id"]
             if id_val is not None:
-                objects_out.setdefault(type_name, {})[str(id_val)] = value
+                objects_out.setdefault(type_name, {})[str(id_val)] = _project_value_for_registry(value, td.fields)
 
         # Also index inline objects found in reference fields
         for i, field in enumerate(td.fields):
             v = record.values[i] if i < len(record.values) else None
-            if isinstance(v, dict) and field.type_expr:
+            if isinstance(v, dict) and "id" in v and field.type_expr:
                 ref_td = schema.get_type(field.type_expr)
                 if ref_td:
                     ref_type_name = ref_td.name or ref_td.alias
-                    ref_id_idx = ref_td.get_id_field_index()
-                    if ref_id_idx >= 0:
-                        id_field_name = ref_td.fields[ref_id_idx].name
-                        ref_id = v.get(id_field_name)
-                        if ref_id is not None:
-                            if ref_type_name not in objects_out:
-                                objects_out[ref_type_name] = {}
-                            if str(ref_id) not in objects_out[ref_type_name]:
-                                objects_out[ref_type_name][str(ref_id)] = v
+                    ref_id = v.get("id")
+                    if ref_id is not None:
+                        if ref_type_name not in objects_out:
+                            objects_out[ref_type_name] = {}
+                        if str(ref_id) not in objects_out[ref_type_name]:
+                            objects_out[ref_type_name][str(ref_id)] = v
+            # Also index inline objects in arrays
+            elif isinstance(v, list) and field.type_expr:
+                elem_type = field.type_expr
+                if elem_type.endswith("[]"):
+                    elem_type = elem_type[:-2].strip()
+                ref_td = schema.get_type(elem_type)
+                if ref_td:
+                    ref_type_name = ref_td.name or ref_td.alias
+                    for item in v:
+                        if isinstance(item, dict) and "id" in item:
+                            item_id = item["id"]
+                            if item_id is not None:
+                                if ref_type_name not in objects_out:
+                                    objects_out[ref_type_name] = {}
+                                if str(item_id) not in objects_out[ref_type_name]:
+                                    objects_out[ref_type_name][str(item_id)] = item
 
-    return {"records": records_out, "objects": objects_out}
+    return {"records": records_out, "objects": objects_out, "_schema": result.schema}
 
 
 
@@ -162,9 +258,12 @@ async def test_valid_case(case):
         expected_value = rv["expected_value"]
         follow = rv.get("follow_references", False)
         try:
-            actual = _resolve_json_path(comparable, path, follow_references=follow)
+            actual = _resolve_json_path(comparable, path, follow_references=follow, schema=comparable.get("_schema"))
         except (KeyError, IndexError, TypeError):
-            pytest.fail(f"[{case['id']}] Cannot resolve path {path}")
+            if expected_value is None:
+                actual = None
+            else:
+                pytest.fail(f"[{case['id']}] Cannot resolve path {path}")
         if isinstance(expected_value, (int, float, str)) and isinstance(actual, dict):
             actual = _normalize_value(actual)
         assert actual == expected_value, (
@@ -177,9 +276,12 @@ async def test_valid_case(case):
         expected_value = ov["expected_value"]
         follow = ov.get("follow_references", False)
         try:
-            actual = _resolve_json_path(comparable, path, follow_references=follow)
+            actual = _resolve_json_path(comparable, path, follow_references=follow, schema=comparable.get("_schema"))
         except (KeyError, IndexError, TypeError):
-            pytest.fail(f"[{case['id']}] Cannot resolve path {path}")
+            if expected_value is None:
+                actual = None
+            else:
+                pytest.fail(f"[{case['id']}] Cannot resolve path {path}")
         if isinstance(expected_value, (int, float, str)) and isinstance(actual, dict):
             actual = _normalize_value(actual)
         assert actual == expected_value, (

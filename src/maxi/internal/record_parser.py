@@ -61,6 +61,7 @@ class RecordParser:
         length = len(text)
         i = 0
         line_number = 1
+        at_line_start = True
         result_records = self.result.records  # local ref
         _parse_single = self._parse_single_record
 
@@ -71,16 +72,33 @@ class RecordParser:
             if ch == "\n":
                 line_number += 1
                 i += 1
+                at_line_start = True
                 continue
 
             if ch <= " ":  # space, tab, \r, and other control chars
                 i += 1
                 continue
 
+            # Comment line: skip to end of line
+            if ch == "#":
+                at_line_start = False
+                while i < length and text[i] != "\n":
+                    i += 1
+                continue
+
             # Record must start with identifier char: A-Z, a-z, _
             if not (ch.isalpha() or ch == "_"):
+                if at_line_start:
+                    raise MaxiError(
+                        f"Invalid syntax in data section: unexpected character '{ch}' at line {line_number}",
+                        MaxiErrorCode.InvalidSyntaxError,
+                        line=line_number,
+                        filename=self._filename,
+                    )
                 i += 1
                 continue
+
+            at_line_start = False
 
             # Parse alias using find for the opening paren
             alias_start = i
@@ -93,9 +111,19 @@ class RecordParser:
                     break
             alias = text[alias_start:i]
 
-            # Skip whitespace before '('
+            # Skip whitespace before '(' or ':'
             while i < length and text[i] <= " " and text[i] != "\n":
                 i += 1
+
+            # Type definition after ### is a structural error (StreamError)
+            if i < length and text[i] == ":":
+                raise MaxiError(
+                    f"Type definition '{alias}:...' found in data section (after ###). "
+                    f"Type definitions must appear before ###.",
+                    MaxiErrorCode.StreamError,
+                    line=line_number,
+                    filename=self._filename,
+                )
 
             if i >= length or text[i] != "(":
                 continue
@@ -637,8 +665,12 @@ class RecordParser:
 
         type_expr = _get_type_expr(field_def) or "str"
 
+        # Extract base type from expressions like int(>=0), str(=10), etc.
+        _base_type_m = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", type_expr)
+        base_type = _base_type_m.group(1) if _base_type_m else type_expr
+
         # int
-        if type_expr == "int":
+        if base_type == "int":
             nk = self._detect_number_kind(value_str)
             if nk == 1:
                 return int(value_str)
@@ -664,7 +696,7 @@ class RecordParser:
             return value_str
 
         # bool
-        if type_expr == "bool":
+        if base_type == "bool":
             if value_str in ("1", "true"):
                 return True
             if value_str in ("0", "false"):
@@ -684,7 +716,7 @@ class RecordParser:
             return value_str
 
         # Explicit str type
-        if _get_type_expr_raw(field_def) == "str":
+        if base_type == "str" and _get_type_expr_raw(field_def) is not None:
             return value_str
 
         # enum with string base
@@ -705,7 +737,7 @@ class RecordParser:
             return s
 
         # float
-        if type_expr == "float":
+        if base_type == "float":
             nk = self._detect_number_kind(value_str)
             fk = self._detect_float_kind(value_str)
             if fk or nk in (1, 2, 3):
@@ -725,7 +757,7 @@ class RecordParser:
             return value_str
 
         # decimal → Python Decimal
-        if type_expr == "decimal":
+        if base_type == "decimal":
             nk = self._detect_number_kind(value_str)
             if nk == 3:
                 return int(value_str[:-1])
@@ -817,7 +849,11 @@ class RecordParser:
         if not content:
             return {}
 
-        map_val_type = self._get_map_value_type(_get_type_expr(field_def))
+        _raw_type_expr = _get_type_expr(field_def)
+        map_val_type = self._get_map_value_type(_raw_type_expr)
+        if map_val_type is None and _raw_type_expr is not None:
+            # bare 'map' or 'map' without generics defaults to str values
+            map_val_type = "str"
         val_fd: dict[str, Any] | None = {"typeExpr": map_val_type} if map_val_type else None
 
         result: dict[str, Any] = {}
@@ -902,6 +938,8 @@ class RecordParser:
         val_str = entry_str[colon_idx + 1 :].strip()
         key = self._parse_field_value(key_str, {"typeExpr": "str"}, line_number)
         value = self._parse_field_value(val_str, value_fd, line_number)
+        if value_fd:
+            self._validate_inline_type_constraints(value, value_fd.get("typeExpr"), "map value", line_number)
         target[str(key)] = value
 
     # ── inline object ────────────────────────────────────────────────────
@@ -938,6 +976,45 @@ class RecordParser:
                 v = field.default_value if field.default_value is not _MISSING else None
             obj[field.name] = v
         return obj
+
+    def _validate_inline_type_constraints(self, value: Any, type_expr: str | None, field_name: str, line_number: int) -> None:
+        """Validate inline constraints like int(>=0) embedded in type expressions."""
+        if not type_expr:
+            return
+        m = re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*\((.+)\)\s*$", type_expr)
+        if not m:
+            return
+        constraint_str = m.group(1)
+        parts = [p.strip() for p in constraint_str.split(",") if p.strip()]
+        for part in parts:
+            cmp = re.match(r"^(>=|>|<=|<)\s*(.+)$", part)
+            if not cmp:
+                continue
+            operator, limit_str = cmp.group(1), cmp.group(2)
+            try:
+                limit = float(limit_str)
+            except ValueError:
+                continue
+            if isinstance(value, str):
+                actual = len(value)
+            elif isinstance(value, (int, float)):
+                actual = value
+            else:
+                continue
+            violated = False
+            if operator == ">=" and actual < limit:
+                violated = True
+            elif operator == ">" and actual <= limit:
+                violated = True
+            elif operator == "<=" and actual > limit:
+                violated = True
+            elif operator == "<" and actual >= limit:
+                violated = True
+            if violated:
+                msg = f"{field_name}: value {actual} violates constraint {operator}{limit}"
+                if self._is_strict:
+                    raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=self._filename)
+                self.result.add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
 
     def _get_inline_object_type_alias(self, type_expr: str | None) -> str | None:
         if not type_expr:
