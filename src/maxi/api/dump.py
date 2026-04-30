@@ -28,11 +28,9 @@ def dump_maxi(
     collect_references: bool = True,
 ) -> str:
     """Serialize data into a MAXI string."""
-    # MaxiParseResult path
     if isinstance(data, MaxiParseResult):
         return _dump_from_parse_result(data, multiline=multiline, include_types=include_types)
 
-    # Normalize to {alias: [rows]}
     data_map: dict[str, list[Any]]
     if isinstance(data, list):
         if not default_alias:
@@ -102,7 +100,6 @@ def dump_maxi_auto(
             if obj is not None and isinstance(obj, (dict,)) or hasattr(obj, "__dict__"):
                 _collect_schemas_deep(obj, collected)
 
-    # Merge caller-supplied types (caller wins)
     if types:
         caller = _normalize_types(types)
         collected.update(caller)
@@ -192,8 +189,43 @@ def _dump_from_objects(
 
     for alias, rows in records_to_dump.items():
         t = all_types.get(alias)
-        for obj in (rows or []):
-            out.append(_dump_object_as_record(alias, obj, t, all_types, multiline, collect_references))
+        if not multiline and t and not collect_references and isinstance(t, dict):
+            fields = t.get("fields") or []
+            _nq_re = _NEEDS_QUOTING_RE
+            _esc = _escape_string
+            for obj in (rows or []):
+                if not isinstance(obj, dict):
+                    out.append(_dump_object_as_record(alias, obj, t, all_types, multiline, collect_references))
+                    continue
+                vals: list[str] = []
+                for f in fields:
+                    fn = f.get("name") if isinstance(f, dict) else getattr(f, "name", None)
+                    if fn not in obj:
+                        vals.append("")
+                        continue
+                    v = obj[fn]
+                    if v is None:
+                        vals.append("~")
+                    elif isinstance(v, bool):
+                        vals.append("1" if v else "0")
+                    elif isinstance(v, (int, float)):
+                        vals.append(str(v))
+                    elif isinstance(v, str):
+                        if _nq_re.search(v):
+                            vals.append(f'"{_esc(v)}"')
+                        else:
+                            vals.append(v)
+                    elif isinstance(v, (list, dict)):
+                        vals.append(_dump_value(v, f, all_types, collect_references))
+                    else:
+                        vals.append(str(v))
+                li = len(vals) - 1
+                while li >= 0 and vals[li] == "":
+                    li -= 1
+                out.append(f"{alias}({'|'.join(vals[:li + 1])})")
+        else:
+            for obj in (rows or []):
+                out.append(_dump_object_as_record(alias, obj, t, all_types, multiline, collect_references))
 
     return "\n".join(out)
 
@@ -460,7 +492,6 @@ def _dump_object_as_record(
             raw = list(vars(obj).values()) if hasattr(obj, "__dict__") else []
         vals = ["~" if v is None else _dump_value(v, None, all_types, collect_refs) for v in raw]
 
-    # Trim trailing empty values
     last = len(vals) - 1
     while last >= 0 and vals[last] == "":
         last -= 1

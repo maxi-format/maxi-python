@@ -35,14 +35,11 @@ class SchemaParser:
         self.local_aliases: set[str] = set()
         self._is_imported: bool = False
 
-    # ── public entry point ───────────────────────────────────────────────
-
     async def parse(self) -> None:
         if not self.schema_text.strip():
             return
 
         lines = self.schema_text.split("\n")
-        # Normalise \r\n
         lines = [l.rstrip("\r") for l in lines]
         line_number = 1
 
@@ -76,8 +73,6 @@ class SchemaParser:
 
         if not self._is_imported:
             self._validate_field_type_references()
-
-    # ── directives ───────────────────────────────────────────────────────
 
     async def _parse_directive(self, line: str, line_number: int) -> None:
         m = re.match(r"^@([a-zA-Z_][a-zA-Z0-9_-]*):(.+)$", line)
@@ -130,15 +125,13 @@ class SchemaParser:
                 line=line_number,
                 filename=self.options.get("filename"),
             )
-        self.result.schema.mode = value  # type: ignore[assignment]
+        self.result.schema.mode = value
 
     async def _parse_schema_directive(self, path_or_url: str, line_number: int) -> None:
         if path_or_url in self.loading_stack:
             return
         self.result.schema.imports.append(path_or_url)
         await self._load_external_schema(path_or_url, line_number)
-
-    # ── type definition parsing ──────────────────────────────────────────
 
     def _parse_type_definition(
         self, lines: list[str], start_index: int, start_line: int
@@ -305,8 +298,6 @@ class SchemaParser:
 
         self.result.schema.add_type(type_def)
 
-    # ── paren matching ───────────────────────────────────────────────────
-
     @staticmethod
     def _find_matching_paren(s: str, open_idx: int) -> int:
         if open_idx < 0 or s[open_idx] != "(":
@@ -337,8 +328,6 @@ class SchemaParser:
                     return i
         return -1
 
-    # ── field list / field parsing ───────────────────────────────────────
-
     def _parse_field_list(self, fields_str: str, line_number: int) -> list[MaxiFieldDef]:
         normalized = re.sub(r"\s+", " ", fields_str.replace("\r", " ").replace("\n", " ").replace("\t", " ")).strip()
         parts = [p.strip() for p in self._split_top_level(normalized, "|") if p.strip()]
@@ -359,14 +348,12 @@ class SchemaParser:
             name_part = remaining[:colon_idx].strip()
             rest_part = remaining[colon_idx + 1 :].strip()
 
-        # Extract trailing constraints (...) from rest_part
         if rest_part:
             trailing = self._extract_trailing_group(rest_part, "(", ")")
             if trailing:
                 constraints = self._parse_constraints(trailing["inner"], line_number)
                 rest_part = trailing["before"].strip()
 
-                # Check for element constraints: type(elem_constraints)[]
                 if re.search(r"\[\]\s*$", rest_part):
                     without_brackets = re.sub(r"\[\]\s*$", "", rest_part).strip()
                     inner_trailing = self._extract_trailing_group(without_brackets, "(", ")")
@@ -374,14 +361,12 @@ class SchemaParser:
                         element_constraints = self._parse_constraints(inner_trailing["inner"], line_number)
                         rest_part = inner_trailing["before"].strip() + "[]"
 
-        # If no constraints from rest, try from name_part
         if not constraints:
             trailing = self._extract_trailing_group(name_part, "(", ")")
             if trailing:
                 constraints = self._parse_constraints(trailing["inner"], line_number)
                 name_part = trailing["before"].strip()
 
-        # Extract default value
         eq_idx = self._find_top_level_char(name_part, "=")
         if eq_idx != -1:
             default_value = name_part[eq_idx + 1 :].strip()
@@ -404,7 +389,6 @@ class SchemaParser:
             if isinstance(dv, str) and dv.startswith('"') and dv.endswith('"'):
                 default_value = self._unescape_string(dv[1:-1])
 
-        # Parse type_expr and annotation from rest_part
         type_expr: str | None = None
         annotation: str | None = None
 
@@ -426,8 +410,6 @@ class SchemaParser:
             element_constraints=element_constraints if element_constraints else None,
             default_value=default_value if has_default else _MISSING,
         )
-
-    # ── top-level splitting utilities ────────────────────────────────────
 
     @staticmethod
     def _split_top_level(s: str, delim: str) -> list[str]:
@@ -554,8 +536,6 @@ class SchemaParser:
             "inner": trimmed[start_idx + 1 : close_idx],
         }
 
-    # ── constraint parsing ───────────────────────────────────────────────
-
     def _parse_constraints(self, constraint_str: str, line_number: int) -> list[ParsedConstraint]:
         constraints: list[ParsedConstraint] = []
         parts = [p.strip() for p in self._split_constraint_parts(constraint_str) if p.strip()]
@@ -568,13 +548,11 @@ class SchemaParser:
                 constraints.append(ParsedConstraint(type="id"))
                 continue
 
-            # exact-length: =N
             m = re.match(r"^=(\d+)$", part)
             if m:
                 constraints.append(ParsedConstraint(type="exact-length", value=int(m.group(1))))
                 continue
 
-            # comparison: >=, >, <=, <, =
             m = re.match(r"^(>=|>|<=|<|=)\s*(.+)$", part)
             if m:
                 op = m.group(1)
@@ -585,13 +563,12 @@ class SchemaParser:
                     try:
                         num_val = float(val_str)
                     except ValueError:
-                        num_val = val_str  # type: ignore[assignment]
+                        num_val = val_str
                 c = ParsedConstraint(type="comparison", value=num_val if isinstance(num_val, (int, float)) else val_str)
-                c.operator = op  # type: ignore[attr-defined]
+                c.operator = op
                 constraints.append(c)
                 continue
 
-            # pattern
             if part.startswith("pattern:"):
                 pattern = part[len("pattern:") :].strip()
                 try:
@@ -607,14 +584,12 @@ class SchemaParser:
                 constraints.append(ParsedConstraint(type="pattern", value=pattern))
                 continue
 
-            # mime
             if part.startswith("mime:"):
                 mime_spec = part[len("mime:") :].strip()
                 mime_types = self._parse_mime_spec(mime_spec)
                 constraints.append(ParsedConstraint(type="mime", value=mime_types))
                 continue
 
-            # decimal precision  e.g. 5.2, 0:10.2, .2:4
             if re.match(r"^(\d+:)?(\d+)?\.(\d+(?::\d+)?)?$", part):
                 constraints.append(self._parse_decimal_precision(part))
                 continue
@@ -762,13 +737,11 @@ class SchemaParser:
                 frac_max = int(frac_part)
 
         c = ParsedConstraint(type="decimal-precision", value=raw)
-        c.int_min = int_min  # type: ignore[attr-defined]
-        c.int_max = int_max  # type: ignore[attr-defined]
-        c.frac_min = frac_min  # type: ignore[attr-defined]
-        c.frac_max = frac_max  # type: ignore[attr-defined]
+        c.int_min = int_min
+        c.int_max = int_max
+        c.frac_min = frac_min
+        c.frac_max = frac_max
         return c
-
-    # ── escape helpers ───────────────────────────────────────────────────
 
     @staticmethod
     def _unescape_string(s: str) -> str:
@@ -780,8 +753,6 @@ class SchemaParser:
             .replace("\\\\", "\\")
         )
 
-    # ── type reference validation ────────────────────────────────────────
-
     def _extract_referenced_type(self, type_expr: str | None) -> str | None:
         if not type_expr:
             return None
@@ -789,7 +760,6 @@ class SchemaParser:
         if t.startswith("enum"):
             return None
 
-        # map<K,V>
         m = re.match(r"^map\s*<\s*(.+)\s*>\s*$", t)
         if m:
             inside = m.group(1)
@@ -807,10 +777,8 @@ class SchemaParser:
         if t == "map":
             return None
 
-        # Strip trailing constraint groups
         t = re.sub(r"\([^)]*\)\s*$", "", t).strip()
 
-        # Strip array brackets
         while t.endswith("[]"):
             t = t[:-2].strip()
             t = re.sub(r"\([^)]*\)\s*$", "", t).strip()
@@ -827,16 +795,13 @@ class SchemaParser:
             for field in type_def.fields:
                 ref = self._extract_referenced_type(field.type_expr)
                 if ref and not schema.has_type(ref):
-                    # Also try name → alias resolution
-                    resolved = schema.resolve_type_alias(ref) if hasattr(schema, "resolve_type_alias") else None  # type: ignore[attr-defined]
+                    resolved = schema.resolve_type_alias(ref) if hasattr(schema, "resolve_type_alias") else None
                     if not resolved:
                         raise MaxiError(
                             f"Field '{field.name}' in type '{alias}' references unknown type '{ref}'",
                             MaxiErrorCode.UnknownTypeError,
                             filename=self.options.get("filename"),
                         )
-
-    # ── default value validation ─────────────────────────────────────────
 
     def _validate_default_values(self) -> None:
         from maxi.core.types import _MISSING
@@ -872,8 +837,6 @@ class SchemaParser:
                             MaxiErrorCode.InvalidDefaultValueError,
                             filename=self.options.get("filename"),
                         )
-
-    # ── inheritance resolution ───────────────────────────────────────────
 
     def _resolve_inheritance(self) -> None:
         visited: set[str] = set()
@@ -924,15 +887,13 @@ class SchemaParser:
         for alias in list(self.result.schema.types.keys()):
             resolve(alias)
 
-    # ── name index ───────────────────────────────────────────────────────
-
     def _build_name_index(self) -> None:
         name_to_alias: dict[str, str] = {}
         for alias, td in self.result.schema.types.items():
             if td.name and td.name not in name_to_alias:
                 name_to_alias[td.name] = alias
 
-        self.result.schema._name_to_alias = name_to_alias  # type: ignore[attr-defined]
+        self.result.schema._name_to_alias = name_to_alias
 
         def _resolve(maybe: str | None) -> str | None:
             if not maybe:
@@ -941,9 +902,7 @@ class SchemaParser:
                 return maybe
             return name_to_alias.get(maybe)
 
-        self.result.schema.resolve_type_alias = _resolve  # type: ignore[attr-defined]
-
-    # ── external schema loading ──────────────────────────────────────────
+        self.result.schema.resolve_type_alias = _resolve
 
     async def _load_external_schema(self, path_or_url: str, line_number: int) -> None:
         load_fn = self.options.get("load_schema")

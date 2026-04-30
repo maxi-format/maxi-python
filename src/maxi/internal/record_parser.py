@@ -15,21 +15,21 @@ from maxi.internal.constraint_validator import validate_record_constraints
 if TYPE_CHECKING:
     from maxi.core.types import MaxiFieldDef, MaxiParseResult, MaxiTypeDef
 
-# Pre-compiled regex for fast record boundary detection
 _RECORD_START_RE = re.compile(r'([A-Za-z_][A-Za-z0-9_-]*)\s*\(')
-# Pre-compiled regex for integer detection (most common numeric type)
+_SINGLE_LINE_RE = re.compile(r'^[ \t]*([A-Za-z_][A-Za-z0-9_-]*)[ \t]*\((.+)\)[ \t]*$')
+_TYPE_DEF_RE = re.compile(r'^[ \t]*([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:')
 _INT_RE = re.compile(r'^-?\d+$')
 _DECIMAL_RE = re.compile(r'^-?\d+\.\d+$')
 _TRAILING_DOT_RE = re.compile(r'^-?\d+\.$')
-# Set of chars that force complex parsing in records
 _COMPLEX_CHARS_SET = frozenset('"()[]{}~')
+_COMPLEX_CHARS_RE = re.compile(r'["\(\)\[\]{}~]')
 
 
 class RecordParser:
     """Parse the records section of a MAXI document."""
 
     _PRIMITIVES = frozenset({"str", "int", "decimal", "bool", "bytes", "map", "float"})
-    _EXPLICIT_NULL = object()  # sentinel: explicit ~ in the data
+    _EXPLICIT_NULL = object()
 
     def __init__(
         self,
@@ -43,182 +43,193 @@ class RecordParser:
         self.seen_ids: dict[str, set[str]] = {}
         self._is_strict: bool = result.schema.mode == "strict"
         self._filename: str | None = options.get("filename")
-        # Pre-computed per-type field info for fast-path parsing
         self._type_field_cache: dict[str, _TypeFieldInfo | None] = {}
-
-    # ── public entry point ───────────────────────────────────────────────
 
     async def parse(self) -> None:
         text = self.records_text
         if not text or not text.strip():
             return
 
-        # Pre-build field info cache for all known types
         for alias, td in self.result.schema.types.items():
             td._ensure_cache()
             self._type_field_cache[alias] = _TypeFieldInfo(td)
 
-        length = len(text)
-        i = 0
-        line_number = 1
-        at_line_start = True
-        result_records = self.result.records  # local ref
+        result_records = self.result.records
         _parse_single = self._parse_single_record
+        _single_line_re = _SINGLE_LINE_RE
+        _type_def_re = _TYPE_DEF_RE
 
-        # Use str.find to skip whitespace-only / newline regions faster
-        while i < length:
-            ch = text[i]
+        lines = text.split("\n")
+        total_lines = len(lines)
+        pending_alias: str | None = None
+        pending_line = 0
+        pending_buffer = ""
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+        in_string = False
+        escape_next = False
 
-            if ch == "\n":
-                line_number += 1
-                i += 1
-                at_line_start = True
+        for li in range(total_lines):
+            line = lines[li]
+            line_number = li + 1
+
+            if pending_alias is not None:
+                for ci in range(len(line)):
+                    ch = line[ci]
+                    if escape_next:
+                        escape_next = False
+                        continue
+                    if in_string:
+                        if ch == "\\":
+                            escape_next = True
+                        elif ch == '"':
+                            in_string = False
+                        continue
+                    if ch == '"':
+                        in_string = True
+                        continue
+                    if ch == "(":
+                        paren_depth += 1
+                    elif ch == ")":
+                        paren_depth -= 1
+                        if paren_depth == 0:
+                            pending_buffer += "\n" + line[:ci]
+                            record = _parse_single(pending_alias, pending_buffer, pending_line)
+                            result_records.append(record)
+                            pending_alias = None
+                            pending_buffer = ""
+                            break
+                    elif ch == "[":
+                        bracket_depth += 1
+                    elif ch == "]":
+                        bracket_depth = max(0, bracket_depth - 1)
+                    elif ch == "{":
+                        brace_depth += 1
+                    elif ch == "}":
+                        brace_depth = max(0, brace_depth - 1)
+
+                if pending_alias is not None:
+                    pending_buffer += "\n" + line
                 continue
 
-            if ch <= " ":  # space, tab, \r, and other control chars
-                i += 1
+            trimmed = line.lstrip()
+            if not trimmed or trimmed[0] == "#":
                 continue
 
-            # Comment line: skip to end of line
-            if ch == "#":
-                at_line_start = False
-                while i < length and text[i] != "\n":
-                    i += 1
-                continue
-
-            # Record must start with identifier char: A-Z, a-z, _
-            if not (ch.isalpha() or ch == "_"):
-                if at_line_start:
+            m = _single_line_re.match(line)
+            if m:
+                alias = m.group(1)
+                values_str = m.group(2)
+                paren_pos = line.find("(")
+                colon_pos = line.find(":")
+                if 0 < colon_pos < paren_pos:
+                    alias_part = line[:colon_pos].strip()
                     raise MaxiError(
-                        f"Invalid syntax in data section: unexpected character '{ch}' at line {line_number}",
-                        MaxiErrorCode.InvalidSyntaxError,
+                        f"Type definition '{alias_part}:...' found in data section (after ###). "
+                        f"Type definitions must appear before ###.",
+                        MaxiErrorCode.StreamError,
                         line=line_number,
                         filename=self._filename,
                     )
-                i += 1
+                record = _parse_single(alias, values_str, line_number)
+                result_records.append(record)
                 continue
 
-            at_line_start = False
+            paren_pos = trimmed.find("(")
+            if paren_pos > 0:
+                alias = trimmed[:paren_pos].rstrip()
 
-            # Parse alias using find for the opening paren
-            alias_start = i
-            i += 1
-            while i < length:
-                c = text[i]
-                if c.isalnum() or c == "_" or c == "-":
-                    i += 1
-                else:
-                    break
-            alias = text[alias_start:i]
+                if ":" in alias:
+                    alias_part = alias.split(":")[0].strip()
+                    raise MaxiError(
+                        f"Type definition '{alias_part}:...' found in data section (after ###). "
+                        f"Type definitions must appear before ###.",
+                        MaxiErrorCode.StreamError,
+                        line=line_number,
+                        filename=self._filename,
+                    )
 
-            # Skip whitespace before '(' or ':'
-            while i < length and text[i] <= " " and text[i] != "\n":
-                i += 1
-
-            # Type definition after ### is a structural error (StreamError)
-            if i < length and text[i] == ":":
-                raise MaxiError(
-                    f"Type definition '{alias}:...' found in data section (after ###). "
-                    f"Type definitions must appear before ###.",
-                    MaxiErrorCode.StreamError,
-                    line=line_number,
-                    filename=self._filename,
-                )
-
-            if i >= length or text[i] != "(":
-                continue
-
-            record_line = line_number
-            i += 1  # past '('
-            values_start = i
-
-            # Fast path: use str.index to find ')' — works when no nesting
-            try:
-                close_pos = text.index(")", i)
-            except ValueError:
-                raise MaxiError(
-                    f"Unclosed record parentheses for '{alias}'",
-                    MaxiErrorCode.InvalidSyntaxError,
-                    line=record_line,
-                    filename=self._filename,
-                )
-
-            # Check if content is simple (no nesting chars between i and close_pos)
-            segment = text[values_start:close_pos]
-            needs_complex = False
-            for ch in segment:
-                if ch == '"' or ch == '(' or ch == '[' or ch == '{' or ch == '\n':
-                    needs_complex = True
-                    break
-
-            if not needs_complex:
-                values_str = segment
-                i = close_pos + 1
-            else:
-                # Slow path: handle nesting & strings
+                pending_alias = alias
+                pending_line = line_number
+                pending_buffer = trimmed[paren_pos + 1:]
                 paren_depth = 1
                 bracket_depth = 0
                 brace_depth = 0
                 in_string = False
                 escape_next = False
 
-                while i < length:
-                    c = text[i]
-                    if c == "\n":
-                        line_number += 1
+                rem = pending_buffer
+                for ci in range(len(rem)):
+                    ch = rem[ci]
                     if escape_next:
                         escape_next = False
-                        i += 1
                         continue
                     if in_string:
-                        if c == "\\":
+                        if ch == "\\":
                             escape_next = True
-                        elif c == '"':
+                        elif ch == '"':
                             in_string = False
-                        i += 1
                         continue
-                    if c == '"':
+                    if ch == '"':
                         in_string = True
-                        i += 1
                         continue
-                    if c == "(":
+                    if ch == "(":
                         paren_depth += 1
-                    elif c == ")":
+                    elif ch == ")":
                         paren_depth -= 1
                         if paren_depth == 0:
+                            pending_buffer = rem[:ci]
+                            record = _parse_single(pending_alias, pending_buffer, pending_line)
+                            result_records.append(record)
+                            pending_alias = None
+                            pending_buffer = ""
                             break
-                    elif c == "[":
+                    elif ch == "[":
                         bracket_depth += 1
-                    elif c == "]":
+                    elif ch == "]":
                         bracket_depth = max(0, bracket_depth - 1)
-                    elif c == "{":
+                    elif ch == "{":
                         brace_depth += 1
-                    elif c == "}":
+                    elif ch == "}":
                         brace_depth = max(0, brace_depth - 1)
-                    i += 1
+                continue
 
-                if i >= length or text[i] != ")" or paren_depth != 0 or bracket_depth != 0 or brace_depth != 0:
-                    if bracket_depth != 0:
-                        raise MaxiError(
-                            f"Malformed array: unmatched bracket in record '{alias}'",
-                            MaxiErrorCode.ArraySyntaxError,
-                            line=record_line,
-                            filename=self._filename,
-                        )
+            if ":" in trimmed:
+                m2 = _type_def_re.match(trimmed)
+                if m2:
                     raise MaxiError(
-                        f"Unclosed record parentheses for '{alias}'",
-                        MaxiErrorCode.InvalidSyntaxError,
-                        line=record_line,
+                        f"Type definition '{m2.group(1)}:...' found in data section (after ###). "
+                        f"Type definitions must appear before ###.",
+                        MaxiErrorCode.StreamError,
+                        line=line_number,
                         filename=self._filename,
                     )
 
-                values_str = text[values_start:i]
-                i += 1  # past ')'
+            fc = trimmed[0]
+            if not (fc.isalpha() or fc == "_"):
+                raise MaxiError(
+                    f"Invalid syntax in data section: unexpected character '{fc}' at line {line_number}",
+                    MaxiErrorCode.InvalidSyntaxError,
+                    line=line_number,
+                    filename=self._filename,
+                )
 
-            record = _parse_single(alias, values_str, record_line)
-            result_records.append(record)
+        if pending_alias is not None:
+            if bracket_depth != 0:
+                raise MaxiError(
+                    f"Malformed array: unmatched bracket in record '{pending_alias}'",
+                    MaxiErrorCode.ArraySyntaxError,
+                    line=pending_line,
+                    filename=self._filename,
+                )
+            raise MaxiError(
+                f"Unclosed record parentheses for '{pending_alias}'",
+                MaxiErrorCode.InvalidSyntaxError,
+                line=pending_line,
+                filename=self._filename,
+            )
 
-    # ── single record ────────────────────────────────────────────────────
 
     def _parse_single_record(self, alias: str, values_str: str, line_number: int) -> MaxiRecord:
         type_def = self.result.schema.get_type(alias)
@@ -238,7 +249,6 @@ class RecordParser:
 
         tfi = self._type_field_cache.get(alias)
 
-        # Try fast path for simple records (no special chars)
         if tfi and tfi.can_fast_parse:
             fast_result = self._try_fast_parse(values_str, type_def, tfi, line_number, alias)
             if fast_result is not None:
@@ -246,7 +256,6 @@ class RecordParser:
 
         values = self._parse_field_values(values_str, type_def, line_number)
 
-        # LAX heuristic for inherited 'type' field
         if not self._is_strict:
             type_field_idx = next(
                 (i for i, f in enumerate(type_def.fields) if f.name == "type"), -1
@@ -261,7 +270,6 @@ class RecordParser:
                     inferred = str(type_def.alias).lower()
                 values = values[:type_field_idx] + [inferred] + values[type_field_idx:]
 
-        # Strict field count validation
         if self._is_strict:
             if len(values) < len(type_def.fields):
                 flags = type_def.get_required_flags()
@@ -282,7 +290,6 @@ class RecordParser:
                     filename=self._filename,
                 )
 
-        # Fill defaults, validate required
         field_count = len(type_def.fields)
         final_values: list[Any] = [None] * field_count
         req_flags = type_def.get_required_flags()
@@ -291,7 +298,6 @@ class RecordParser:
             field = type_def.fields[idx]
             value = values[idx] if idx < len(values) else None
 
-            # Explicit null (~) → None, do NOT apply default
             if value is self._EXPLICIT_NULL:
                 if req_flags[idx] and field.default_value is not _MISSING:
                     error = MaxiError(
@@ -323,7 +329,6 @@ class RecordParser:
 
             final_values[idx] = value
 
-        # Enum validation — only check fields that actually have enums
         if tfi and tfi.enum_field_indices:
             enum_values_cache = tfi.enum_values_list
             for idx in tfi.enum_field_indices:
@@ -337,7 +342,6 @@ class RecordParser:
                             raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=self._filename)
                         self.result.add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
         else:
-            # Fallback for uncached
             for idx in range(field_count):
                 enum_vals = type_def.get_enum_values(idx)
                 if enum_vals:
@@ -350,11 +354,9 @@ class RecordParser:
                                 raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=self._filename)
                             self.result.add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
 
-        # Runtime constraint validation
         if type_def.has_runtime_constraints:
             validate_record_constraints(final_values, type_def, self._is_strict, self.result, line_number, self._filename)
 
-        # Duplicate ID detection
         id_idx = tfi.id_field_index if tfi else type_def.get_id_field_index()
         if 0 <= id_idx < len(final_values):
             id_val = final_values[id_idx]
@@ -373,16 +375,12 @@ class RecordParser:
 
         return MaxiRecord(alias=alias, values=final_values, line_number=line_number)
 
-    # ── fast-path record parsing ─────────────────────────────────────────
-
     def _try_fast_parse(
         self, values_str: str, type_def: MaxiTypeDef, tfi: _TypeFieldInfo,
         line_number: int, alias: str,
     ) -> MaxiRecord | None:
         """Attempt fast-path parsing for simple records with no special chars."""
-        # Quick reject: any special characters that need complex parsing
-        # Use a set intersection check instead of per-char loop
-        if _COMPLEX_CHARS_SET.intersection(values_str):
+        if _COMPLEX_CHARS_RE.search(values_str):
             return None
 
         parts = values_str.split("|")
@@ -398,7 +396,6 @@ class RecordParser:
 
         n_parts = len(parts)
 
-        # LAX 'type' field heuristic
         if not self._is_strict and has_type_field >= 0 and n_parts == field_count - 1:
             tf = type_def.fields[has_type_field]
             if tf.default_value is not _MISSING and tf.default_value is not None:
@@ -410,7 +407,6 @@ class RecordParser:
             parts = parts[:has_type_field] + [inferred] + parts[has_type_field:]
             n_parts = len(parts)
 
-        # Strict count check
         if self._is_strict:
             if n_parts < field_count:
                 for idx in range(n_parts, field_count):
@@ -550,7 +546,6 @@ class RecordParser:
                 else:
                     value = raw
             else:
-                # _FK_COMPLEX — fall back to slow path
                 return None
 
             if req_flags[idx] and value is None:
@@ -566,7 +561,6 @@ class RecordParser:
 
             final_values[idx] = value
 
-        # Enum validation — only for fields that have enums (use frozenset for O(1))
         if enum_field_indices:
             for idx in enum_field_indices:
                 val = final_values[idx]
@@ -579,11 +573,9 @@ class RecordParser:
                             raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=fname)
                         add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
 
-        # Runtime constraint validation
         if tfi.has_runtime_constraints:
             validate_record_constraints(final_values, type_def, is_strict, self.result, line_number, fname)
 
-        # Duplicate ID detection
         if 0 <= id_idx < len(final_values):
             id_val = final_values[id_idx]
             if id_val is not None:
@@ -601,17 +593,10 @@ class RecordParser:
 
         return MaxiRecord(alias=alias, values=final_values, line_number=line_number)
 
-    # ── field value parsing ──────────────────────────────────────────────
-
     def _parse_field_values(
         self, values_str: str, type_def: MaxiTypeDef | None, line_number: int
     ) -> list[Any]:
-        # Fast path check: no special chars
-        is_simple = True
-        for ch in values_str:
-            if ch in ('"', "(", ")", "[", "]", "{", "}"):
-                is_simple = False
-                break
+        is_simple = not _COMPLEX_CHARS_RE.search(values_str)
 
         if is_simple:
             fields = type_def.fields if type_def else None
@@ -665,11 +650,9 @@ class RecordParser:
 
         type_expr = _get_type_expr(field_def) or "str"
 
-        # Extract base type from expressions like int(>=0), str(=10), etc.
         _base_type_m = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", type_expr)
         base_type = _base_type_m.group(1) if _base_type_m else type_expr
 
-        # int
         if base_type == "int":
             nk = self._detect_number_kind(value_str)
             if nk == 1:
@@ -695,7 +678,6 @@ class RecordParser:
             )
             return value_str
 
-        # bool
         if base_type == "bool":
             if value_str in ("1", "true"):
                 return True
@@ -715,18 +697,14 @@ class RecordParser:
             )
             return value_str
 
-        # Explicit str type
         if base_type == "str" and _get_type_expr_raw(field_def) is not None:
             return value_str
 
-        # enum with string base
         if type_expr.startswith("enum"):
             m = re.match(r"^enum<(\w+)>", type_expr)
             if not m or m.group(1) == "str":
                 return value_str
-            # enum<int> etc. – fall through
 
-        # bytes with base64 annotation (lax auto-pad)
         annotation = _get_annotation(field_def)
         if not self._is_strict and type_expr == "bytes" and annotation == "base64":
             s = value_str
@@ -736,7 +714,6 @@ class RecordParser:
                     return s + ("===" if mod == 1 else "==" if mod == 2 else "=")
             return s
 
-        # float
         if base_type == "float":
             nk = self._detect_number_kind(value_str)
             fk = self._detect_float_kind(value_str)
@@ -756,7 +733,6 @@ class RecordParser:
             )
             return value_str
 
-        # decimal → Python Decimal
         if base_type == "decimal":
             nk = self._detect_number_kind(value_str)
             if nk == 3:
@@ -780,7 +756,6 @@ class RecordParser:
             )
             return value_str
 
-        # Untyped / str-with-annotation → lax numeric coercion
         if not self._is_strict:
             fk = self._detect_float_kind(value_str)
             if fk:
@@ -794,8 +769,6 @@ class RecordParser:
                 return int(value_str[:-1])
 
         return value_str
-
-    # ── array ────────────────────────────────────────────────────────────
 
     def _parse_array(self, array_str: str, field_def: Any, line_number: int) -> list[Any]:
         content = array_str[1:-1].strip()
@@ -842,8 +815,6 @@ class RecordParser:
             elements.append(self._parse_field_value(remainder, elem_fd, line_number))
         return elements
 
-    # ── map ──────────────────────────────────────────────────────────────
-
     def _parse_map(self, map_str: str, field_def: Any, line_number: int) -> dict[str, Any]:
         content = map_str[1:-1].strip()
         if not content:
@@ -852,7 +823,6 @@ class RecordParser:
         _raw_type_expr = _get_type_expr(field_def)
         map_val_type = self._get_map_value_type(_raw_type_expr)
         if map_val_type is None and _raw_type_expr is not None:
-            # bare 'map' or 'map' without generics defaults to str values
             map_val_type = "str"
         val_fd: dict[str, Any] | None = {"typeExpr": map_val_type} if map_val_type else None
 
@@ -898,7 +868,6 @@ class RecordParser:
         line_number: int,
         value_fd: dict[str, Any] | None = None,
     ) -> None:
-        # Find colon at top level
         colon_idx = -1
         depth = 0
         in_string = False
@@ -941,8 +910,6 @@ class RecordParser:
         if value_fd:
             self._validate_inline_type_constraints(value, value_fd.get("typeExpr"), "map value", line_number)
         target[str(key)] = value
-
-    # ── inline object ────────────────────────────────────────────────────
 
     def _parse_inline_object(self, obj_str: str, field_def: Any, line_number: int) -> Any:
         inner = obj_str[1:-1]
@@ -1034,8 +1001,6 @@ class RecordParser:
         resolver = getattr(self.result.schema, "resolve_type_alias", None)
         return resolver(base) if resolver else base
 
-    # ── type helpers ─────────────────────────────────────────────────────
-
     @staticmethod
     def _get_array_element_type(type_expr: str | None) -> str | None:
         if not type_expr:
@@ -1088,8 +1053,6 @@ class RecordParser:
             return parts[0] or None
         return parts[-1] or None
 
-    # ── string parsing ───────────────────────────────────────────────────
-
     @staticmethod
     def _parse_quoted_string(s: str) -> str:
         inner = s[1:-1]
@@ -1100,8 +1063,6 @@ class RecordParser:
             .replace('\\"', '"')
             .replace("\\\\", "\\")
         )
-
-    # ── splitting utility ────────────────────────────────────────────────
 
     @staticmethod
     def _split_top_level(s: str, delim: str) -> list[str]:
@@ -1143,7 +1104,6 @@ class RecordParser:
         parts.append(s[part_start:])
         return parts
 
-    # ── numeric detection ────────────────────────────────────────────────
 
     @staticmethod
     def _detect_number_kind(s: str) -> int:
@@ -1206,9 +1166,7 @@ class RecordParser:
         return pad <= 2
 
 
-# ── Pre-computed field info for fast-path parsing ────────────────────────
 
-# Field kind constants for fast dispatch
 _FK_STR = 0
 _FK_INT = 1
 _FK_BOOL = 2
@@ -1217,7 +1175,7 @@ _FK_ENUM_INT_LAX = 4
 _FK_DECIMAL = 5
 _FK_FLOAT = 6
 _FK_UNTYPED = 7
-_FK_COMPLEX = 8  # needs slow path
+_FK_COMPLEX = 8
 
 
 class _TypeFieldInfo:
@@ -1241,19 +1199,15 @@ class _TypeFieldInfo:
         self.defaults: list[Any] = [f.default_value for f in fields]
         self.has_runtime_constraints: bool = td.has_runtime_constraints
 
-        # Enum info
         self.enum_values_list: list[list[str] | None] = [td.get_enum_values(i) for i in range(n)]
         self.enum_field_indices: list[int] = [i for i in range(n) if self.enum_values_list[i] is not None]
 
-        # Pre-compute enum sets for O(1) lookup
         self.enum_sets: list[frozenset[str] | None] = [
             frozenset(ev) if ev else None for ev in self.enum_values_list
         ]
 
-        # Type field index for LAX heuristic
         self.type_field_index: int = next((i for i, f in enumerate(fields) if f.name == "type"), -1)
 
-        # Compute field_kinds for integer-based dispatch
         self.field_kinds: list[int] = []
         for te in self.type_exprs:
             if te == "int":
@@ -1276,11 +1230,8 @@ class _TypeFieldInfo:
             else:
                 self.field_kinds.append(_FK_COMPLEX)
 
-        # Determine if fast-path is possible
         self.can_fast_parse = _FK_COMPLEX not in self.field_kinds
 
-
-# ── Module-level fast number detection ───────────────────────────────────
 
 def _detect_number_kind_fast(s: str) -> int:
     """0=not numeric, 1=int, 2=decimal, 3=trailing-dot."""
@@ -1294,8 +1245,6 @@ def _detect_number_kind_fast(s: str) -> int:
         return 3
     return 0
 
-
-# ── helpers to extract field_def attributes from MaxiFieldDef or dict ────
 
 def _get_type_expr(field_def: Any) -> str | None:
     if field_def is None:

@@ -39,7 +39,6 @@ def build_object_registry(result: MaxiParseResult) -> dict[str, dict[str, dict[s
     """Build ``{alias: {id_str: field_dict}}`` from all parsed records and inline objects."""
     registry: dict[str, dict[str, dict[str, Any]]] = {}
 
-    # Pass 1: top-level records with an id field
     for record in result.records:
         td = result.schema.get_type(record.alias)
         if td is None:
@@ -65,7 +64,6 @@ def build_object_registry(result: MaxiParseResult) -> dict[str, dict[str, dict[s
 
         alias_map[str(id_val)] = obj
 
-    # Pass 2: inline objects in reference-typed fields
     for record in result.records:
         td = result.schema.get_type(record.alias)
         if td is None:
