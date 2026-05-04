@@ -21,7 +21,6 @@ def dump_maxi(
     multiline: bool = False,
     include_types: bool = True,
     version: str | None = None,
-    mode: str | None = None,
     schema_file: str | None = None,
     types: dict[str, Any] | list[Any] | None = None,
     default_alias: str | None = None,
@@ -50,7 +49,6 @@ def dump_maxi(
     input_obj = {
         "schema": {
             "version": version,
-            "mode": mode,
             "imports": [schema_file] if schema_file else [],
             "types": types,
         },
@@ -71,7 +69,6 @@ def dump_maxi_auto(
     multiline: bool = False,
     include_types: bool = True,
     version: str | None = None,
-    mode: str | None = None,
     schema_file: str | None = None,
     types: dict[str, Any] | list[Any] | None = None,
     default_alias: str | None = None,
@@ -109,7 +106,6 @@ def dump_maxi_auto(
         multiline=multiline,
         include_types=include_types,
         version=version,
-        mode=mode,
         schema_file=schema_file,
         types=collected if collected else None,
         collect_references=collect_references,
@@ -127,8 +123,6 @@ def _dump_from_parse_result(
     schema = result.schema
     if schema.version and schema.version != "1.0.0":
         out.append(f"@version:{schema.version}")
-    if schema.mode == "strict":
-        out.append("@mode:strict")
     for imp in schema.imports:
         out.append(f"@schema:{imp}")
 
@@ -164,8 +158,6 @@ def _dump_from_objects(
     v = schema.get("version")
     if v and v != "1.0.0":
         out.append(f"@version:{v}")
-    if schema.get("mode") == "strict":
-        out.append("@mode:strict")
     for imp in schema.get("imports") or []:
         out.append(f"@schema:{imp}")
 

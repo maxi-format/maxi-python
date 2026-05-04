@@ -26,7 +26,11 @@ def _make_schema_loader(case_dir):
 )
 async def test_round_trip(case):
     """Parse → dump → re-parse should produce equivalent records."""
-    kwargs = {"mode": case["mode"]}
+    opts = case.get("parser_options", {})
+    kwargs = {}
+    for k, v in opts.items():
+        snake = "".join(["_" + c.lower() if c.isupper() else c for c in k]).lstrip("_")
+        kwargs[snake] = v
     if "@schema" in case["input"]:
         kwargs["load_schema"] = _make_schema_loader(case["dir"])
     result1 = await parse_maxi(case["input"], **kwargs)
@@ -34,7 +38,7 @@ async def test_round_trip(case):
         pytest.skip("No records to round-trip")
 
     dumped = dump_maxi(result1)
-    reparse_kwargs = {"mode": "lax"}
+    reparse_kwargs = {}
     if "@schema" in dumped:
         reparse_kwargs["load_schema"] = _make_schema_loader(case["dir"])
     result2 = await parse_maxi(dumped, **reparse_kwargs)

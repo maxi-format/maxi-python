@@ -246,7 +246,12 @@ def _result_to_comparable(result):
 async def test_valid_case(case):
     """Parse a valid MAXI document and validate record/object assertions."""
     expected = case["expected"]
-    kwargs = {"mode": case["mode"]}
+    # Convert camelCase parserOptions to snake_case kwargs
+    opts = case.get("parser_options", {})
+    kwargs = {}
+    for k, v in opts.items():
+        snake = "".join(["_" + c.lower() if c.isupper() else c for c in k]).lstrip("_")
+        kwargs[snake] = v
     if "@schema" in case["input"]:
         kwargs["load_schema"] = _make_schema_loader(case["dir"])
     result = await parse_maxi(case["input"], **kwargs)
@@ -299,7 +304,12 @@ async def test_valid_case(case):
 )
 async def test_error_case(case):
     """Parse a MAXI document that should raise MaxiError."""
-    kwargs = {"mode": case["mode"]}
+    # Convert camelCase parserOptions to snake_case kwargs
+    opts = case.get("parser_options", {})
+    kwargs = {}
+    for k, v in opts.items():
+        snake = "".join(["_" + c.lower() if c.isupper() else c for c in k]).lstrip("_")
+        kwargs[snake] = v
     if "@schema" in case["input"]:
         kwargs["load_schema"] = _make_schema_loader(case["dir"])
     with pytest.raises(MaxiError):
@@ -315,7 +325,12 @@ async def test_error_case(case):
 )
 async def test_warning_case(case):
     """Parse a MAXI document and check warnings are produced (no exception)."""
-    kwargs = {"mode": case["mode"]}
+    # Convert camelCase parserOptions to snake_case kwargs
+    opts = case.get("parser_options", {})
+    kwargs = {}
+    for k, v in opts.items():
+        snake = "".join(["_" + c.lower() if c.isupper() else c for c in k]).lstrip("_")
+        kwargs[snake] = v
     if "@schema" in case["input"]:
         kwargs["load_schema"] = _make_schema_loader(case["dir"])
     result = await parse_maxi(case["input"], **kwargs)

@@ -47,9 +47,9 @@ class MaxiStreamResult:
 async def stream_maxi(
     input: str,
     *,
-    mode: str = "lax",
     filename: str | None = None,
     load_schema: Callable[[str], str | Awaitable[str]] | None = None,
+    **kwargs: Any,
 ) -> MaxiStreamResult:
     """Parse schema eagerly, yield records lazily.
 
@@ -61,9 +61,8 @@ async def stream_maxi(
             process(record)
     """
     result = MaxiParseResult()
-    result.schema.mode = mode  # type: ignore[assignment]
 
-    options: dict[str, Any] = {"filename": filename}
+    options: dict[str, Any] = {"filename": filename, **kwargs}
     if load_schema is not None:
         options["load_schema"] = load_schema
 

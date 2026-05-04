@@ -21,15 +21,27 @@ _NON_REF_TYPES = frozenset({"str", "int", "decimal", "float", "bool", "bytes"})
 async def parse_maxi(
     input: str,
     *,
-    mode: str = "lax",
+    allow_additional_fields: str = "ignore",
+    allow_missing_fields: str = "null",
+    allow_type_coercion: str = "coerce",
+    allow_constraint_violations: str = "warning",
+    allow_forward_references: bool = True,
+    allow_unknown_types: str = "warning",
     filename: str | None = None,
     load_schema: Callable[[str], str | Awaitable[str]] | None = None,
 ) -> MaxiParseResult:
     """Parse a MAXI document into schema + records."""
     result = MaxiParseResult()
-    result.schema.mode = mode  # type: ignore[assignment]
 
-    options: dict[str, Any] = {"filename": filename}
+    options: dict[str, Any] = {
+        "filename": filename,
+        "allow_additional_fields": allow_additional_fields,
+        "allow_missing_fields": allow_missing_fields,
+        "allow_type_coercion": allow_type_coercion,
+        "allow_constraint_violations": allow_constraint_violations,
+        "allow_forward_references": allow_forward_references,
+        "allow_unknown_types": allow_unknown_types,
+    }
     if load_schema is not None:
         options["load_schema"] = load_schema
 
@@ -62,7 +74,7 @@ async def parse_maxi(
         if has_refs:
             registry = build_object_registry(result)
             result._object_registry = registry  # type: ignore[attr-defined]
-            validate_references(result, registry, filename)
+            validate_references(result, registry, filename, options)
 
     return result
 
@@ -71,15 +83,15 @@ async def parse_maxi_as(
     input: str,
     class_map: dict[str, type],
     *,
-    mode: str = "lax",
     filename: str | None = None,
     load_schema: Callable[[str], str | Awaitable[str]] | None = None,
+    **kwargs: Any,
 ) -> MaxiHydrateResult:
     """Parse and hydrate records into Python class instances."""
     if not isinstance(class_map, dict):
         raise TypeError("parse_maxi_as: class_map must be a {alias: Class} dict.")
 
-    result = await parse_maxi(input, mode=mode, filename=filename, load_schema=load_schema)
+    result = await parse_maxi(input, filename=filename, load_schema=load_schema, **kwargs)
     return _hydrate_result(result, class_map)
 
 
@@ -87,9 +99,9 @@ async def parse_maxi_auto_as(
     input: str,
     classes: list[type],
     *,
-    mode: str = "lax",
     filename: str | None = None,
     load_schema: Callable[[str], str | Awaitable[str]] | None = None,
+    **kwargs: Any,
 ) -> MaxiHydrateResult:
     """Auto-detect alias→class mapping from class metadata, then hydrate."""
     from maxi.core.registry import get_maxi_schema
@@ -107,7 +119,7 @@ async def parse_maxi_auto_as(
             )
         class_map[schema["alias"]] = cls
 
-    return await parse_maxi_as(input, class_map, mode=mode, filename=filename, load_schema=load_schema)
+    return await parse_maxi_as(input, class_map, filename=filename, load_schema=load_schema, **kwargs)
 
 
 def _split_sections(input: str) -> tuple[str, str | None]:

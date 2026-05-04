@@ -35,7 +35,7 @@ def _load_test_cases():
                 "id": meta.get("id", d.name),
                 "title": meta.get("title", d.name),
                 "category": meta.get("category", "valid"),
-                "mode": meta.get("mode", "lax"),
+                "parser_options": meta.get("parserOptions", {}),
                 "input": in_maxi.read_text(encoding="utf-8"),
                 "expected": json.loads(expected_json.read_text(encoding="utf-8")),
                 "dir": d,

@@ -27,21 +27,20 @@ async def test_missing_reference_lax():
         "###\n"
         "O(100|999|50)"
     )
-    result = await parse_maxi(text, mode="lax")
+    result = await parse_maxi(text)
     assert isinstance(result.warnings, list)
 
 
 @pytest.mark.asyncio
 async def test_missing_reference_strict():
     text = (
-        "@mode:strict\n"
         "U:User(id:int|name)\n"
         "O:Order(id:int|user:U|total:int)\n"
         "###\n"
         "O(100|999|50)"
     )
     with pytest.raises(MaxiError):
-        await parse_maxi(text, mode="strict")
+        await parse_maxi(text, allow_forward_references=False)
 
 
 @pytest.mark.asyncio

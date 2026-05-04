@@ -89,8 +89,6 @@ class SchemaParser:
 
         if name == "version":
             self._parse_version_directive(value, line_number)
-        elif name == "mode":
-            self._parse_mode_directive(value, line_number)
         elif name == "schema":
             await self._parse_schema_directive(value, line_number)
         else:
@@ -117,15 +115,6 @@ class SchemaParser:
             )
         self.result.schema.version = value
 
-    def _parse_mode_directive(self, value: str, line_number: int) -> None:
-        if value not in ("strict", "lax"):
-            raise MaxiError(
-                f"Invalid mode: {value}. Must be 'strict' or 'lax'",
-                MaxiErrorCode.InvalidSyntaxError,
-                line=line_number,
-                filename=self.options.get("filename"),
-            )
-        self.result.schema.mode = value
 
     async def _parse_schema_directive(self, path_or_url: str, line_number: int) -> None:
         if path_or_url in self.loading_stack:
@@ -274,6 +263,14 @@ class SchemaParser:
         alias = header_m.group(1)
         type_name = header_m.group(2) or None
         parents_str = header_m.group(3)
+
+        if type_name and not type_name[0].isalpha():
+            raise MaxiError(
+                f"Invalid type name '{type_name}': type names must start with a letter [a-zA-Z]",
+                MaxiErrorCode.UnknownTypeError,
+                line=line_number,
+                filename=self.options.get("filename"),
+            )
 
         if alias in self.local_aliases:
             raise MaxiError(

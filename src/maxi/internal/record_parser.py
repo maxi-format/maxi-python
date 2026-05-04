@@ -41,7 +41,13 @@ class RecordParser:
         self.result = result
         self.options = options
         self.seen_ids: dict[str, set[str]] = {}
-        self._is_strict: bool = result.schema.mode == "strict"
+        # Parser flags
+        self._allow_additional_fields: str = options.get('allow_additional_fields', 'ignore')
+        self._allow_missing_fields: str = options.get('allow_missing_fields', 'null')
+        self._allow_type_coercion: str = options.get('allow_type_coercion', 'coerce')
+        self._allow_constraint_violations: str = options.get('allow_constraint_violations', 'warning')
+        self._allow_forward_references: bool = options.get('allow_forward_references', True)
+        self._allow_unknown_types: str = options.get('allow_unknown_types', 'warning')
         self._filename: str | None = options.get("filename")
         self._type_field_cache: dict[str, _TypeFieldInfo | None] = {}
 
@@ -241,9 +247,10 @@ class RecordParser:
                 line=line_number,
                 filename=self._filename,
             )
-            if self._is_strict:
+            if self._allow_unknown_types == 'error':
                 raise error
-            self.result.add_warning(error.args[0], code=error.code, line=line_number)
+            if self._allow_unknown_types == 'warning':
+                self.result.add_warning(error.args[0], code=error.code, line=line_number)
             values = self._parse_field_values(values_str, None, line_number)
             return MaxiRecord(alias=alias, values=values, line_number=line_number)
 
@@ -256,7 +263,7 @@ class RecordParser:
 
         values = self._parse_field_values(values_str, type_def, line_number)
 
-        if not self._is_strict:
+        if self._allow_additional_fields != 'error':
             type_field_idx = next(
                 (i for i, f in enumerate(type_def.fields) if f.name == "type"), -1
             )
@@ -270,7 +277,7 @@ class RecordParser:
                     inferred = str(type_def.alias).lower()
                 values = values[:type_field_idx] + [inferred] + values[type_field_idx:]
 
-        if self._is_strict:
+        if self._allow_missing_fields == 'error':
             if len(values) < len(type_def.fields):
                 flags = type_def.get_required_flags()
                 for idx in range(len(values), len(type_def.fields)):
@@ -282,12 +289,19 @@ class RecordParser:
                             line=line_number,
                             filename=self._filename,
                         )
-            elif len(values) > len(type_def.fields):
+        if len(values) > len(type_def.fields):
+            if self._allow_additional_fields == 'error':
                 raise MaxiError(
                     f"Record '{alias}' has {len(values)} values but type defines {len(type_def.fields)} fields",
                     MaxiErrorCode.SchemaMismatchError,
                     line=line_number,
                     filename=self._filename,
+                )
+            elif self._allow_additional_fields == 'warning':
+                self.result.add_warning(
+                    f"Record '{alias}' has {len(values)} values but type defines {len(type_def.fields)} fields",
+                    code=MaxiErrorCode.SchemaMismatchError,
+                    line=line_number,
                 )
 
         field_count = len(type_def.fields)
@@ -306,7 +320,7 @@ class RecordParser:
                         line=line_number,
                         filename=self._filename,
                     )
-                    if self._is_strict:
+                    if self._allow_missing_fields == 'error':
                         raise error
                     self.result.add_warning(error.args[0], code=error.code, line=line_number)
                 value = None
@@ -323,7 +337,7 @@ class RecordParser:
                     line=line_number,
                     filename=self._filename,
                 )
-                if self._is_strict:
+                if self._allow_missing_fields == "error":
                     raise error
                 self.result.add_warning(error.args[0], code=error.code, line=line_number)
 
@@ -338,7 +352,7 @@ class RecordParser:
                     sv = str(val)
                     if sv not in enum_vals:
                         msg = f"Value '{sv}' not in enum [{','.join(enum_vals)}] for field '{type_def.fields[idx].name}'"
-                        if self._is_strict:
+                        if self._allow_constraint_violations == 'error':
                             raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=self._filename)
                         self.result.add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
         else:
@@ -350,12 +364,12 @@ class RecordParser:
                         sv = str(val)
                         if sv not in enum_vals:
                             msg = f"Value '{sv}' not in enum [{','.join(enum_vals)}] for field '{type_def.fields[idx].name}'"
-                            if self._is_strict:
+                            if self._allow_constraint_violations == 'error':
                                 raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=self._filename)
                             self.result.add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
 
         if type_def.has_runtime_constraints:
-            validate_record_constraints(final_values, type_def, self._is_strict, self.result, line_number, self._filename)
+            validate_record_constraints(final_values, type_def, self._allow_constraint_violations == "error", self.result, line_number, self._filename)
 
         id_idx = tfi.id_field_index if tfi else type_def.get_id_field_index()
         if 0 <= id_idx < len(final_values):
@@ -368,7 +382,7 @@ class RecordParser:
                 id_key = str(id_val)
                 if id_key in seen:
                     msg = f"Duplicate identifier '{id_val}' for type '{alias}'"
-                    if self._is_strict:
+                    if self._allow_constraint_violations == 'error':
                         raise MaxiError(msg, MaxiErrorCode.DuplicateIdentifierError, line=line_number, filename=self._filename)
                     self.result.add_warning(msg, code=MaxiErrorCode.DuplicateIdentifierError, line=line_number)
                 seen.add(id_key)
@@ -396,7 +410,7 @@ class RecordParser:
 
         n_parts = len(parts)
 
-        if not self._is_strict and has_type_field >= 0 and n_parts == field_count - 1:
+        if self._allow_additional_fields != "error" and has_type_field >= 0 and n_parts == field_count - 1:
             tf = type_def.fields[has_type_field]
             if tf.default_value is not _MISSING and tf.default_value is not None:
                 inferred = tf.default_value
@@ -407,7 +421,7 @@ class RecordParser:
             parts = parts[:has_type_field] + [inferred] + parts[has_type_field:]
             n_parts = len(parts)
 
-        if self._is_strict:
+        if self._allow_missing_fields == 'error':
             if n_parts < field_count:
                 for idx in range(n_parts, field_count):
                     if req_flags[idx] and defaults[idx] is _MISSING:
@@ -417,7 +431,8 @@ class RecordParser:
                             line=line_number,
                             filename=self._filename,
                         )
-            elif n_parts > field_count:
+        if n_parts > field_count:
+            if self._allow_additional_fields == 'error':
                 raise MaxiError(
                     f"Record '{alias}' has {n_parts} values but type defines {field_count} fields",
                     MaxiErrorCode.SchemaMismatchError,
@@ -426,7 +441,9 @@ class RecordParser:
                 )
 
         final_values: list[Any] = [None] * field_count
-        is_strict = self._is_strict
+        _allow_type_coercion = self._allow_type_coercion
+        _allow_constraint_violations = self._allow_constraint_violations
+        _allow_missing_fields = self._allow_missing_fields
         add_warning = self.result.add_warning
         fname = self._filename
         _nk = _detect_number_kind_fast
@@ -442,7 +459,7 @@ class RecordParser:
             elif fk == _FK_INT:
                 if _INT_RE.match(raw):
                     value = int(raw)
-                elif is_strict:
+                elif _allow_type_coercion == 'error':
                     raise MaxiError(
                         f"Type mismatch: field expects int, got '{raw}'",
                         MaxiErrorCode.TypeMismatchError,
@@ -470,7 +487,7 @@ class RecordParser:
                     value = True
                 elif raw == "false" or raw == "0":
                     value = False
-                elif is_strict:
+                elif _allow_type_coercion == 'error':
                     raise MaxiError(
                         f"Type mismatch: field expects bool, got '{raw}'",
                         MaxiErrorCode.TypeMismatchError,
@@ -489,11 +506,8 @@ class RecordParser:
             elif fk == _FK_ENUM_STR:
                 value = raw
             elif fk == _FK_ENUM_INT_LAX:
-                if not is_strict and _INT_RE.match(raw):
+                if _INT_RE.match(raw):
                     value = int(raw)
-                elif not is_strict:
-                    nk = _nk(raw)
-                    value = float(raw) if nk == 2 else raw
                 else:
                     value = raw
             elif fk == _FK_DECIMAL:
@@ -505,7 +519,7 @@ class RecordParser:
                         value = float(raw)
                     except ValueError:
                         value = raw
-                elif is_strict:
+                elif _allow_type_coercion == 'error':
                     raise MaxiError(
                         f"Type mismatch: field expects decimal, got '{raw}'",
                         MaxiErrorCode.TypeMismatchError,
@@ -520,7 +534,7 @@ class RecordParser:
                     value = float(raw.rstrip("."))
                 elif _fk(raw):
                     value = float(raw)
-                elif is_strict:
+                elif _allow_type_coercion == 'error':
                     raise MaxiError(
                         f"Type mismatch: field expects float, got '{raw}'",
                         MaxiErrorCode.TypeMismatchError,
@@ -530,7 +544,7 @@ class RecordParser:
                 else:
                     value = raw
             elif fk == _FK_UNTYPED:
-                if not is_strict:
+                if _allow_type_coercion != 'error':
                     if _INT_RE.match(raw):
                         value = int(raw)
                     else:
@@ -555,7 +569,7 @@ class RecordParser:
                     line=line_number,
                     filename=fname,
                 )
-                if is_strict:
+                if _allow_missing_fields == 'error':
                     raise error
                 add_warning(error.args[0], code=error.code, line=line_number)
 
@@ -569,12 +583,12 @@ class RecordParser:
                     if sv not in enum_sets[idx]:
                         enum_vals = tfi.enum_values_list[idx]
                         msg = f"Value '{sv}' not in enum [{','.join(enum_vals)}] for field '{type_def.fields[idx].name}'"
-                        if is_strict:
+                        if _allow_constraint_violations == 'error':
                             raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=fname)
                         add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
 
         if tfi.has_runtime_constraints:
-            validate_record_constraints(final_values, type_def, is_strict, self.result, line_number, fname)
+            validate_record_constraints(final_values, type_def, _allow_constraint_violations == "error", self.result, line_number, fname)
 
         if 0 <= id_idx < len(final_values):
             id_val = final_values[id_idx]
@@ -586,7 +600,7 @@ class RecordParser:
                 id_key = str(id_val)
                 if id_key in seen:
                     msg = f"Duplicate identifier '{id_val}' for type '{alias}'"
-                    if is_strict:
+                    if _allow_constraint_violations == 'error':
                         raise MaxiError(msg, MaxiErrorCode.DuplicateIdentifierError, line=line_number, filename=fname)
                     add_warning(msg, code=MaxiErrorCode.DuplicateIdentifierError, line=line_number)
                 seen.add(id_key)
@@ -657,7 +671,7 @@ class RecordParser:
             nk = self._detect_number_kind(value_str)
             if nk == 1:
                 return int(value_str)
-            if self._is_strict:
+            if self._allow_type_coercion == 'error':
                 raise MaxiError(
                     f"Type mismatch: field expects int, got '{value_str}'",
                     MaxiErrorCode.TypeMismatchError,
@@ -683,7 +697,7 @@ class RecordParser:
                 return True
             if value_str in ("0", "false"):
                 return False
-            if self._is_strict:
+            if self._allow_type_coercion == 'error':
                 raise MaxiError(
                     f"Type mismatch: field expects bool, got '{value_str}'",
                     MaxiErrorCode.TypeMismatchError,
@@ -702,11 +716,15 @@ class RecordParser:
 
         if type_expr.startswith("enum"):
             m = re.match(r"^enum<(\w+)>", type_expr)
-            if not m or m.group(1) == "str":
-                return value_str
+            if m and m.group(1) == "int":
+                try:
+                    return int(value_str)
+                except ValueError:
+                    return value_str
+            return value_str
 
         annotation = _get_annotation(field_def)
-        if not self._is_strict and type_expr == "bytes" and annotation == "base64":
+        if self._allow_type_coercion != "error" and type_expr == "bytes" and annotation == "base64":
             s = value_str
             if self._looks_like_base64(s):
                 mod = len(s) % 4
@@ -719,7 +737,7 @@ class RecordParser:
             fk = self._detect_float_kind(value_str)
             if fk or nk in (1, 2, 3):
                 return float(value_str.rstrip("."))
-            if self._is_strict:
+            if self._allow_type_coercion == 'error':
                 raise MaxiError(
                     f"Type mismatch: field expects float, got '{value_str}'",
                     MaxiErrorCode.TypeMismatchError,
@@ -742,7 +760,7 @@ class RecordParser:
                     return float(value_str)
                 except (ValueError, InvalidOperation):
                     pass
-            if self._is_strict:
+            if self._allow_type_coercion == 'error':
                 raise MaxiError(
                     f"Type mismatch: field expects decimal, got '{value_str}'",
                     MaxiErrorCode.TypeMismatchError,
@@ -756,7 +774,7 @@ class RecordParser:
             )
             return value_str
 
-        if not self._is_strict:
+        if self._allow_type_coercion != 'error':
             fk = self._detect_float_kind(value_str)
             if fk:
                 return float(value_str)
@@ -919,18 +937,19 @@ class RecordParser:
 
         td = self.result.schema.get_type(type_alias)
         if not td:
-            if self._is_strict:
+            if self._allow_unknown_types == 'error':
                 raise MaxiError(
                     f"Unknown type alias '{type_alias}' for inline object",
                     MaxiErrorCode.UnknownTypeError,
                     line=line_number,
                     filename=self._filename,
                 )
-            self.result.add_warning(
-                f"Unknown type alias '{type_alias}' for inline object",
-                code=MaxiErrorCode.UnknownTypeError,
-                line=line_number,
-            )
+            if self._allow_unknown_types == 'warning':
+                self.result.add_warning(
+                    f"Unknown type alias '{type_alias}' for inline object",
+                    code=MaxiErrorCode.UnknownTypeError,
+                    line=line_number,
+                )
             return {"values": self._parse_field_values(inner, None, line_number)}
 
         values = self._parse_field_values(inner, td, line_number)
@@ -979,7 +998,7 @@ class RecordParser:
                 violated = True
             if violated:
                 msg = f"{field_name}: value {actual} violates constraint {operator}{limit}"
-                if self._is_strict:
+                if self._allow_constraint_violations == 'error':
                     raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=self._filename)
                 self.result.add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
 

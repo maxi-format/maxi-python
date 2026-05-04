@@ -105,9 +105,10 @@ def validate_references(
     result: MaxiParseResult,
     registry: dict[str, dict[str, Any]],
     filename: str | None = None,
+    options: dict[str, Any] | None = None,
 ) -> None:
     """Validate that all scalar reference values resolve to a known object."""
-    is_strict = result.schema.mode == "strict"
+    allow_forward = (options or {}).get("allow_forward_references", True)
 
     for record in result.records:
         td = result.schema.get_type(record.alias)
@@ -133,7 +134,7 @@ def validate_references(
                     f"Unresolved reference: field '{field.name}' in '{record.alias}' "
                     f"references {ref_alias} id '{value}', but no such object found"
                 )
-                if is_strict:
+                if not allow_forward:
                     raise MaxiError(
                         msg,
                         MaxiErrorCode.UnresolvedReferenceError,

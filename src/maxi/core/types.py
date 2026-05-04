@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 
 _MISSING: Any = object()
@@ -141,10 +141,9 @@ class MaxiTypeDef:
 
 @dataclass
 class MaxiSchema:
-    """Top-level schema object aggregating version, mode, imports, and types."""
+    """Top-level schema object aggregating version, imports, and types."""
 
     version: str = "1.0.0"
-    mode: Literal["strict", "lax"] = "lax"
     imports: list[str] = field(default_factory=list)
     types: dict[str, MaxiTypeDef] = field(default_factory=dict)
 
