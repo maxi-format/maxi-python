@@ -23,6 +23,22 @@ _DECIMAL_RE = re.compile(r'^-?\d+\.\d+$')
 _TRAILING_DOT_RE = re.compile(r'^-?\d+\.$')
 _COMPLEX_CHARS_SET = frozenset('"()[]{}~')
 _COMPLEX_CHARS_RE = re.compile(r'["\(\)\[\]{}~]')
+_INT_RE_MATCH = _INT_RE.match
+
+
+def _has_complex_chars(s: str) -> bool:
+    """Return True if *s* contains any MAXI complex characters (faster than regex for short strings)."""
+    return not _COMPLEX_CHARS_SET.isdisjoint(s)
+
+
+def _is_int_str(s: str) -> bool:
+    """Return True if *s* is a valid integer literal (pure Python, avoids regex overhead)."""
+    if not s:
+        return False
+    start = 1 if s[0] == '-' else 0
+    if start >= len(s):
+        return False
+    return s[start:].isdigit()
 
 
 class RecordParser:
@@ -64,6 +80,7 @@ class RecordParser:
         _parse_single = self._parse_single_record
         _single_line_re = _SINGLE_LINE_RE
         _type_def_re = _TYPE_DEF_RE
+        _single_line_match = _SINGLE_LINE_RE.match
 
         lines = text.split("\n")
         total_lines = len(lines)
@@ -123,24 +140,32 @@ class RecordParser:
             if not trimmed or trimmed[0] == "#":
                 continue
 
-            m = _single_line_re.match(line)
-            if m:
-                alias = m.group(1)
-                values_str = m.group(2)
-                paren_pos = line.find("(")
-                colon_pos = line.find(":")
-                if 0 < colon_pos < paren_pos:
-                    alias_part = line[:colon_pos].strip()
-                    raise MaxiError(
-                        f"Type definition '{alias_part}:...' found in data section (after ###). "
-                        f"Type definitions must appear before ###.",
-                        MaxiErrorCode.StreamError,
-                        line=line_number,
-                        filename=self._filename,
-                    )
-                record = _parse_single(alias, values_str, line_number)
-                result_records.append(record)
-                continue
+            if line[-1:] == ")":
+                paren_open = line.find("(")
+                if paren_open > 0:
+                    alias_candidate = line[:paren_open].strip()
+                    if alias_candidate and ":" not in alias_candidate and " " not in alias_candidate:
+                        colon_pos = line.find(":")
+                        if 0 < colon_pos < paren_open:
+                            alias_part = alias_candidate
+                            raise MaxiError(
+                                f"Type definition '{alias_part}:...' found in data section (after ###). "
+                                f"Type definitions must appear before ###.",
+                                MaxiErrorCode.StreamError,
+                                line=line_number,
+                                filename=self._filename,
+                            )
+                        values_str = line[paren_open + 1:-1]
+                        record = _parse_single(alias_candidate, values_str, line_number)
+                        result_records.append(record)
+                        continue
+                m = _single_line_match(line)
+                if m:
+                    alias = m.group(1)
+                    values_str = m.group(2)
+                    record = _parse_single(alias, values_str, line_number)
+                    result_records.append(record)
+                    continue
 
             paren_pos = trimmed.find("(")
             if paren_pos > 0:
@@ -379,7 +404,7 @@ class RecordParser:
                 if seen is None:
                     seen = set()
                     self.seen_ids[alias] = seen
-                id_key = str(id_val)
+                id_key = id_val if isinstance(id_val, (int, str, float)) else str(id_val)
                 if id_key in seen:
                     msg = f"Duplicate identifier '{id_val}' for type '{alias}'"
                     if self._allow_constraint_violations == 'error':
@@ -394,11 +419,12 @@ class RecordParser:
         line_number: int, alias: str,
     ) -> MaxiRecord | None:
         """Attempt fast-path parsing for simple records with no special chars."""
-        if _COMPLEX_CHARS_RE.search(values_str):
+        if '"' in values_str or '(' in values_str or '[' in values_str or '{' in values_str or '~' in values_str:
             return None
 
         parts = values_str.split("|")
-        parts = [p.strip() for p in parts]
+        if '| ' in values_str or ' |' in values_str or '\t' in values_str:
+            parts = [p.strip() for p in parts]
         field_count = len(type_def.fields)
         field_kinds = tfi.field_kinds
         req_flags = tfi.required_flags
@@ -448,6 +474,7 @@ class RecordParser:
         fname = self._filename
         _nk = _detect_number_kind_fast
         _fk = RecordParser._detect_float_kind
+        _int_match = _INT_RE_MATCH
 
         for idx in range(field_count):
             raw = parts[idx] if idx < n_parts else ""
@@ -457,7 +484,7 @@ class RecordParser:
                 dv = defaults[idx]
                 value = dv if dv is not _MISSING else None
             elif fk == _FK_INT:
-                if _INT_RE.match(raw):
+                if _int_match(raw):
                     value = int(raw)
                 elif _allow_type_coercion == 'error':
                     raise MaxiError(
@@ -506,7 +533,7 @@ class RecordParser:
             elif fk == _FK_ENUM_STR:
                 value = raw
             elif fk == _FK_ENUM_INT_LAX:
-                if _INT_RE.match(raw):
+                if _int_match(raw):
                     value = int(raw)
                 else:
                     value = raw
@@ -545,18 +572,22 @@ class RecordParser:
                     value = raw
             elif fk == _FK_UNTYPED:
                 if _allow_type_coercion != 'error':
-                    if _INT_RE.match(raw):
-                        value = int(raw)
-                    else:
-                        nk = _nk(raw)
-                        if nk == 2:
-                            value = float(raw)
-                        elif nk == 3:
-                            value = int(raw[:-1])
-                        elif _fk(raw):
-                            value = float(raw)
+                    c0 = raw[0]
+                    if c0 == '-' or ('0' <= c0 <= '9'):
+                        if _int_match(raw):
+                            value = int(raw)
                         else:
-                            value = raw
+                            nk = _nk(raw)
+                            if nk == 2:
+                                value = float(raw)
+                            elif nk == 3:
+                                value = int(raw[:-1])
+                            elif _fk(raw):
+                                value = float(raw)
+                            else:
+                                value = raw
+                    else:
+                        value = raw
                 else:
                     value = raw
             else:
@@ -590,14 +621,14 @@ class RecordParser:
         if tfi.has_runtime_constraints:
             validate_record_constraints(final_values, type_def, _allow_constraint_violations == "error", self.result, line_number, fname)
 
-        if 0 <= id_idx < len(final_values):
+        if 0 <= id_idx < field_count:
             id_val = final_values[id_idx]
             if id_val is not None:
                 seen = self.seen_ids.get(alias)
                 if seen is None:
                     seen = set()
                     self.seen_ids[alias] = seen
-                id_key = str(id_val)
+                id_key = id_val if isinstance(id_val, (int, str, float)) else str(id_val)
                 if id_key in seen:
                     msg = f"Duplicate identifier '{id_val}' for type '{alias}'"
                     if _allow_constraint_violations == 'error':
@@ -610,7 +641,7 @@ class RecordParser:
     def _parse_field_values(
         self, values_str: str, type_def: MaxiTypeDef | None, line_number: int
     ) -> list[Any]:
-        is_simple = not _COMPLEX_CHARS_RE.search(values_str)
+        is_simple = not _has_complex_chars(values_str)
 
         if is_simple:
             fields = type_def.fields if type_def else None
@@ -1253,15 +1284,34 @@ class _TypeFieldInfo:
 
 
 def _detect_number_kind_fast(s: str) -> int:
-    """0=not numeric, 1=int, 2=decimal, 3=trailing-dot."""
+    """0=not numeric, 1=int, 2=decimal, 3=trailing-dot.
+
+    Pure-Python implementation avoids regex overhead for the common hot path.
+    """
     if not s:
         return 0
-    if _INT_RE.match(s):
+    i = 0
+    n = len(s)
+    if s[0] == '-':
+        i = 1
+        if i >= n:
+            return 0
+    j = i
+    while j < n and ('0' <= s[j] <= '9'):
+        j += 1
+    if j == i:
+        return 0
+    if j == n:
         return 1
-    if _DECIMAL_RE.match(s):
-        return 2
-    if _TRAILING_DOT_RE.match(s):
-        return 3
+    if s[j] == '.':
+        j += 1
+        if j == n:
+            return 3
+        k = j
+        while j < n and ('0' <= s[j] <= '9'):
+            j += 1
+        if j > k and j == n:
+            return 2
     return 0
 
 

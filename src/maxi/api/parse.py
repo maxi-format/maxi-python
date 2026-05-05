@@ -124,6 +124,26 @@ async def parse_maxi_auto_as(
 
 def _split_sections(input: str) -> tuple[str, str | None]:
     """Split a MAXI document at the ``###`` separator."""
+    idx = input.find("###")
+    while idx != -1:
+        line_start = input.rfind("\n", 0, idx)
+        line_start = line_start + 1 if line_start != -1 else 0
+        before = input[line_start:idx]
+        if not before.strip():
+            end = idx + 3
+            n = len(input)
+            while end < n and input[end] in (' ', '\t'):
+                end += 1
+            if end >= n or input[end] in ('\n', '\r'):
+                schema_section = input[:idx].strip()
+                if end < n and input[end] == '\r':
+                    end += 1
+                if end < n and input[end] == '\n':
+                    end += 1
+                records_section = input[end:].strip()
+                return (schema_section, records_section or None)
+        idx = input.find("###", idx + 1)
+
     m = re.search(r"^[ \t]*###[ \t]*(?:\r?\n|$)", input, re.MULTILINE)
 
     if not m:
@@ -137,9 +157,6 @@ def _split_sections(input: str) -> tuple[str, str | None]:
         if has_explicit or has_inherit:
             return (input, None)
         if has_directive:
-            # File has directives (e.g. @schema) but no inline type definitions.
-            # Find where data records begin. A data record starts with Alias( where
-            # the first value character is a digit, quote, ~, [, {, (, or minus+digit.
             _record_start = re.compile(
                 r"^[ \t]*([A-Za-z_][A-Za-z0-9_-]*)[ \t]*\([ \t]*"
                 r'(?:[\d"~\[\{(]|-\d)',
