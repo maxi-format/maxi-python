@@ -47,7 +47,7 @@ U(1|Julie|julie@example.com)          ← records (data section)
 O(100|1|49.99)
 ```
 
-- Everything **above** `###` is the schema section (type defs, directives like `@version`, `@mode`, `@schema`).
+- Everything **above** `###` is the schema section (type defs, directives like `@version`, `@schema`).
 - Everything **below** `###` is the records section.
 - If no `###` is present, the parser auto-detects whether the input is schema-only or records-only.
 
@@ -58,21 +58,21 @@ O(100|1|49.99)
 ```python
 from maxi import parse_maxi
 
-result = await parse_maxi(input, mode="lax")
+result = await parse_maxi(input)
 ```
 
 Parses the full input at once. Returns a `MaxiParseResult` containing:
 - `result.schema` — types, directives, imports
 - `result.records` — list of `MaxiRecord` objects (positional values, schema-typed)
-- `result.warnings` — recoverable issues found during lax-mode parsing
+- `result.warnings` — recoverable issues found during parsing (type coercions, unknown types, constraint violations, etc.)
 
 ### What the parser does internally
 
 1. **Split sections** at `###`
-2. **Parse schema section** — type definitions, `@version`, `@mode`, `@schema` imports (loaded via `load_schema`)
+2. **Parse schema section** — type definitions, `@version`, `@schema` imports (loaded via `load_schema`)
 3. **Parse records section** — each record is matched to its type def; values are coerced to the declared type (`int`, `bool`, `decimal`, etc.)
 4. **Build object registry** — if any field references another type, an internal object registry (alias → id → object) is built for reference validation
-5. **Validate references** — unresolved references emit a warning (lax) or raise (strict)
+5. **Validate references** — unresolved references emit a warning or raise (depending on `allow_forward_references`)
 
 ---
 
@@ -124,12 +124,11 @@ record.line_number # source line number
 ### `MaxiSchema`
 
 ```python
-schema.get_type("U")   # → MaxiTypeDef | None
-schema.has_type("U")   # → bool
-schema.types           # dict[str, MaxiTypeDef]
-schema.mode            # 'lax' | 'strict'
-schema.version         # str
-schema.imports         # list[str]
+schema.getType('U')    # → MaxiTypeDef | None
+schema.has_type('U')   # → bool
+schema.types           # → dict[str, MaxiTypeDef]
+schema.version         # → str
+schema.imports         # → list[str]
 ```
 
 ### `MaxiTypeDef`
@@ -229,7 +228,7 @@ Each field descriptor:
 ```python
 from maxi import parse_maxi_as
 
-result = await parse_maxi_as(input, class_map, mode="lax")
+result = await parse_maxi_as(input, class_map)
 ```
 
 ### Parameters
@@ -238,7 +237,12 @@ result = await parse_maxi_as(input, class_map, mode="lax")
 |---|---|---|
 | `input` | `str` | MAXI text to parse |
 | `class_map` | `dict[str, type]` | Maps each alias to the constructor to instantiate |
-| `mode` | `str` | `"lax"` (default) or `"strict"` |
+| `allow_additional_fields` | `str` | `'ignore'` (default), `'warning'`, or `'error'` |
+| `allow_missing_fields` | `str` | `'null'` (default), `'warning'`, or `'error'` |
+| `allow_type_coercion` | `str` | `'coerce'` (default), `'warning'`, or `'error'` |
+| `allow_constraint_violations` | `str` | `'warning'` (default) or `'error'` |
+| `allow_forward_references` | `bool` | `True` (default) |
+| `allow_unknown_types` | `str` | `'warning'` (default), `'ignore'`, or `'error'` |
 | `filename` | `str \| None` | Used in error messages for diagnostics |
 | `load_schema` | `callable \| None` | Resolver for `@schema:` import directives |
 
@@ -300,7 +304,7 @@ Forward references work naturally because reference resolution is a **second pas
 
 ### Unresolved references
 
-If a referenced id is not found among the hydrated instances, the field **stays as the original scalar value**. A warning is also emitted by the underlying `parse_maxi` call (in lax mode).
+If a referenced id is not found among the hydrated instances, the field **stays as the original scalar value**. A warning is also emitted by the underlying `parse_maxi` call.
 
 ---
 
@@ -367,7 +371,12 @@ All field types support `required=True` (adds `!` constraint) and `id=True` (mar
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `mode` | `str` | `"lax"` | `"lax"`: accumulates warnings for recoverable errors. `"strict"`: raises on any deviation. |
+| `allow_additional_fields` | `str` | `"ignore"` | Extra fields beyond schema definition: `"ignore"`, `"warning"`, `"error"` |
+| `allow_missing_fields` | `str` | `"null"` | Missing required fields — fill with null or reject: `"null"`, `"warning"`, `"error"` |
+| `allow_type_coercion` | `str` | `"coerce"` | Type mismatches — coerce or reject: `"coerce"`, `"warning"`, `"error"` |
+| `allow_constraint_violations` | `str` | `"warning"` | Constraint violations: `"warning"`, `"error"` |
+| `allow_forward_references` | `bool` | `True` | Allow references to records not yet seen |
+| `allow_unknown_types` | `str` | `"warning"` | Records with an unrecognised type alias: `"ignore"`, `"warning"`, `"error"` |
 | `filename` | `str \| None` | `None` | Used in error/warning messages for better diagnostics |
 | `load_schema` | `callable \| None` | `None` | Resolver for `@schema:` import directives — called with the path string, returns the schema text (sync or async) |
 
@@ -545,18 +554,19 @@ result = await parse_maxi_as(input_text, {"U": User}, load_schema=load_schema)
 
 ---
 
-### 8. Strict mode — raises on schema violations
+### 8. Strict-style validation — raises on schema violations
+
+Use `allow_additional_fields="error"` to reject records with extra fields:
 
 ```python
 input_text = """
-@mode:strict
 U:User(id:int|name)
 ###
 U(1|Julie|extra-field-not-in-schema)
 """.strip()
 
 # Raises MaxiError with code SchemaMismatchError
-await parse_maxi(input_text, mode="strict")
+await parse_maxi(input_text, allow_additional_fields="error")
 ```
 
 ---

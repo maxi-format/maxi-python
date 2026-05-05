@@ -29,7 +29,7 @@ maxi = dump_maxi(data, default_alias="U", types=[...])
 
 `dump_maxi` accepts data in several formats and optional configuration directly as keyword arguments. It emits a MAXI string that may contain:
 
-- Directives (`@version`, `@mode`, `@schema`)
+- Directives (`@version`, `@schema`)
 - Type definitions (schema section)
 - A `###` separator
 - Records (data section)
@@ -213,7 +213,7 @@ You can override or extend the auto-collected types:
 
 ```python
 dump_maxi_auto(users, types=[
-    # Override the User schema with a customised one
+    # Override the User schema with a customized one
     {"alias": "U", "name": "CustomUser", "fields": [{"name": "id", "typeExpr": "int"}, {"name": "name"}]},
 ])
 ```
@@ -268,7 +268,6 @@ This resolution happens once at the start of `dump_maxi` via `_resolve_inheritan
 | `include_types` | `bool` | `True` | Whether to emit type definitions above `###` |
 | `schema_file` | `str` | — | Emit `@schema:<path>` import directive |
 | `version` | `str` | — | Emit `@version:<x>` if not `1.0.0` |
-| `mode` | `str` | — | Emit `@mode:strict` when `"strict"` |
 | `multiline` | `bool` | `False` | Pretty-print type defs and records across multiple lines |
 | `collect_references` | `bool` | `True` | Promote nested typed objects with an `id` into top-level records |
 

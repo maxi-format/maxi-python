@@ -12,7 +12,7 @@ from maxi.core.types import MaxiParseResult, MaxiRecord, _MISSING
 if TYPE_CHECKING:
     from maxi.core.types import MaxiFieldDef, MaxiSchema, MaxiTypeDef
 
-_NEEDS_QUOTING_RE = re.compile(r'[|()\[\]{}~,:]|\s')
+_NEEDS_QUOTING_RE = re.compile(r'[|()\[\]{}~,:\\"]|^\s|\s$')
 
 
 def dump_maxi(
