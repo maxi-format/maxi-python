@@ -7,7 +7,7 @@ Version: `0.1.0`
 ## Install
 
 ```bash
-pip install git+https://github.com/maxi-format/maxi-python.git
+pip install maxi
 ```
 
 ## API overview
