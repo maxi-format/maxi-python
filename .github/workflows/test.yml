@@ -18,7 +18,7 @@ jobs:
       matrix:
         python: ["3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Ensure git submodules (e.g. ./maxi-testdata) are checked out for fixture tests
           submodules: recursive
