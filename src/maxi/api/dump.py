@@ -515,9 +515,15 @@ def _dump_value(
         return "1" if value else "0"
 
     if isinstance(value, str):
+        te = _field_attr(field_info, "typeExpr") or _field_attr(field_info, "type_expr")
+        if te and te.startswith("enum"):
+            return _get_enum_wire_token(te, value)
         return f'"{_escape_string(value)}"' if _needs_quoting(value) else value
 
     if isinstance(value, (int, float)):
+        te = _field_attr(field_info, "typeExpr") or _field_attr(field_info, "type_expr")
+        if te and te.startswith("enum"):
+            return _get_enum_wire_token(te, str(value))
         return str(value)
 
     if isinstance(value, list):
@@ -597,6 +603,25 @@ def _dump_inline_object(
     while last >= 0 and vals[last] == "":
         last -= 1
     return f"({'|'.join(vals[:last + 1])})"
+
+
+def _get_enum_wire_token(type_expr: str, full_value_str: str) -> str:
+    """Return the alias (wire token) for a semantic enum value."""
+    m = re.match(r"^enum(?:<\w+>)?\[([^\]]*)\]$", type_expr)
+    if not m:
+        return full_value_str
+    for token in m.group(1).split(","):
+        token = token.strip()
+        if not token:
+            continue
+        ci = token.find(":")
+        if ci != -1:
+            alias, full = token[:ci], token[ci + 1:]
+            if full == full_value_str or alias == full_value_str:
+                return alias
+        elif token == full_value_str:
+            return token
+    return full_value_str
 
 
 def _needs_quoting(s: str) -> bool:

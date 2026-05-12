@@ -51,8 +51,22 @@ def _parse_enum_type_expr(type_expr: str | None) -> dict[str, Any] | None:
     if not m:
         return None
     base_type = m.group(1) or "str"
-    values = [v.strip() for v in m.group(2).split(",") if v.strip()]
-    return {"base_type": base_type, "values": values}
+    is_int = base_type == "int"
+    tokens = [v.strip() for v in m.group(2).split(",") if v.strip()]
+    alias_map: dict[str, Any] = {}
+    values: list[str] = []
+    for token in tokens:
+        ci = token.find(":")
+        if ci != -1:
+            alias, full_str = token[:ci], token[ci + 1:]
+        else:
+            alias = full_str = token
+        full_val: Any = int(full_str) if is_int else full_str
+        alias_map[alias] = full_val
+        if alias != full_str:
+            alias_map[full_str] = full_val
+        values.append(str(full_val))
+    return {"base_type": base_type, "values": values, "alias_map": alias_map}
 
 
 def validate_schema_constraints(schema: MaxiSchema, filename: str | None = None) -> None:
@@ -61,6 +75,52 @@ def validate_schema_constraints(schema: MaxiSchema, filename: str | None = None)
         for field in type_def.fields:
             _validate_annotation_type_compat(field, type_def.alias, filename)
             _validate_constraint_conflicts(field, type_def.alias, filename)
+            _validate_enum_aliases(field, type_def.alias, filename)
+
+
+def _validate_enum_aliases(
+    field: MaxiFieldDef, type_alias: str, filename: str | None
+) -> None:
+    """Validate enum alias uniqueness (E501)."""
+    if not field.type_expr or not field.type_expr.startswith("enum"):
+        return
+    m = re.match(r"^enum(?:<(\w+)>)?\[([^\]]*)\]$", field.type_expr.strip())
+    if not m:
+        return
+    tokens = [v.strip() for v in m.group(2).split(",") if v.strip()]
+    seen_aliases: set[str] = set()
+    seen_full_values: set[str] = set()
+    for token in tokens:
+        ci = token.find(":")
+        alias = token[:ci] if ci != -1 else token
+        full = token[ci + 1:] if ci != -1 else token
+        if alias in seen_aliases:
+            raise MaxiError(
+                f"Duplicate enum alias '{alias}' in field '{field.name}' of type '{type_alias}'",
+                MaxiErrorCode.EnumAliasError,
+                filename=filename,
+            )
+        if full in seen_full_values:
+            raise MaxiError(
+                f"Duplicate enum value '{full}' in field '{field.name}' of type '{type_alias}'",
+                MaxiErrorCode.EnumAliasError,
+                filename=filename,
+            )
+        seen_aliases.add(alias)
+        seen_full_values.add(full)
+    for token in tokens:
+        ci = token.find(":")
+        if ci == -1:
+            continue
+        alias = token[:ci]
+        own_full = token[ci + 1:]
+        if alias in seen_full_values and alias != own_full:
+            raise MaxiError(
+                f"Enum alias '{alias}' in field '{field.name}' of type '{type_alias}' "
+                f"equals the full value of another entry",
+                MaxiErrorCode.EnumAliasError,
+                filename=filename,
+            )
 
 
 def _validate_annotation_type_compat(
@@ -71,7 +131,6 @@ def _validate_annotation_type_compat(
     allowed = _ANNOTATION_TYPE_MAP.get(field.annotation)
     base = _get_base_type_name(field.type_expr)
     if allowed is None:
-        # Unknown annotation: if applied to bytes, it's an unsupported binary format
         if base == "bytes":
             raise MaxiError(
                 f"Unsupported binary format annotation '@{field.annotation}' for "
@@ -250,8 +309,8 @@ def validate_enum_value(
     if info is None:
         return
     str_value = str(value)
-    if str_value not in info["values"]:
-        msg = f"Value '{str_value}' not in enum [{','.join(info['values'])}] for field '{field_name}'"
+    if str_value not in info["alias_map"]:
+        msg = f"Value '{str_value}' not in enum for field '{field_name}'"
         if is_strict:
             raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=filename)
         result.add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)

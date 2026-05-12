@@ -48,7 +48,7 @@ class MaxiFieldDef:
         return self.default_value is not _MISSING
 
 
-_ENUM_RE = re.compile(r"^enum(?:<\w+>)?\[([^\]]*)\]$")
+_ENUM_RE = re.compile(r"^enum(?:<(\w+)>)?\[([^\]]*)\]$")
 
 
 @dataclass
@@ -64,6 +64,7 @@ class MaxiTypeDef:
     _id_field_index: int = field(default=-2, repr=False, compare=False)
     _required_flags: list[bool] | None = field(default=None, repr=False, compare=False)
     _enum_values: list[list[str] | None] | None = field(default=None, repr=False, compare=False)
+    _enum_alias_map: list[dict[str, Any] | None] | None = field(default=None, repr=False, compare=False)
     _has_runtime_constraints: bool = field(default=False, repr=False, compare=False)
 
     def add_field(self, f: MaxiFieldDef) -> None:
@@ -74,6 +75,7 @@ class MaxiTypeDef:
         self._id_field_index = -2
         self._required_flags = None
         self._enum_values = None
+        self._enum_alias_map = None
 
     def _ensure_cache(self) -> None:
         if self._id_field_index != -2:
@@ -98,14 +100,31 @@ class MaxiTypeDef:
         ]
 
         self._enum_values = [None] * length
+        self._enum_alias_map = [None] * length
         self._has_runtime_constraints = False
         for i, f in enumerate(self.fields):
             if f.type_expr and f.type_expr.startswith("enum"):
                 m = _ENUM_RE.match(f.type_expr)
                 if m:
-                    self._enum_values[i] = [
-                        v.strip() for v in m.group(1).split(",") if v.strip()
-                    ]
+                    is_int = (m.group(1) or "str") == "int"
+                    tokens = [v.strip() for v in m.group(2).split(",") if v.strip()]
+                    amap: dict[str, Any] = {}
+                    full_values: list[str] = []
+                    for token in tokens:
+                        ci = token.find(":")
+                        if ci != -1:
+                            alias = token[:ci]
+                            full_str = token[ci + 1:]
+                        else:
+                            alias = token
+                            full_str = token
+                        full_val: Any = int(full_str) if is_int else full_str
+                        amap[alias] = full_val
+                        if alias != full_str:
+                            amap[full_str] = full_val
+                        full_values.append(str(full_val))
+                    self._enum_values[i] = full_values
+                    self._enum_alias_map[i] = amap
             if f.constraints:
                 for c in f.constraints:
                     if c.type in ("comparison", "pattern", "exact-length"):
@@ -128,10 +147,16 @@ class MaxiTypeDef:
         return self._required_flags
 
     def get_enum_values(self, field_index: int) -> list[str] | None:
-        """Return parsed enum values for *field_index*, or ``None``."""
+        """Return parsed enum semantic values for *field_index*, or ``None``."""
         self._ensure_cache()
         assert self._enum_values is not None
         return self._enum_values[field_index]
+
+    def get_enum_alias_map(self, field_index: int) -> dict[str, Any] | None:
+        """Return the wire-token → semantic-value map for *field_index*, or ``None``."""
+        self._ensure_cache()
+        assert self._enum_alias_map is not None
+        return self._enum_alias_map[field_index]
 
     @property
     def has_runtime_constraints(self) -> bool:

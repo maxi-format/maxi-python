@@ -629,3 +629,36 @@ A:Address(id|street|city)
 C(C1|John|A1)
 A(A1|"123 Main St"|NYC)
 ```
+
+---
+
+### 13. Enum value aliases — compact wire tokens
+
+When a field uses `enum[alias:value, ...]`, the dumper always emits the alias. You can pass either the alias or the full value as input.
+
+```python
+from maxi import dump_maxi
+
+users = [
+    {"id": 1, "name": "Alice", "role": "admin"},   # full value
+    {"id": 2, "name": "Bob",   "role": "e"},       # alias also accepted
+]
+
+maxi = dump_maxi(users, default_alias="U", types=[{
+    "alias": "U",
+    "name": "User",
+    "fields": [
+        {"name": "id",   "type_expr": "int"},
+        {"name": "name"},
+        {"name": "role", "type_expr": "enum[a:admin,e:editor,v:viewer]"},
+    ],
+}])
+```
+
+Output:
+```
+U:User(id:int|name|role:enum[a:admin,e:editor,v:viewer])
+###
+U(1|Alice|a)
+U(2|Bob|e)
+```
