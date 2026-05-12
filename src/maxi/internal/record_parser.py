@@ -369,26 +369,29 @@ class RecordParser:
             final_values[idx] = value
 
         if tfi and tfi.enum_field_indices:
-            enum_values_cache = tfi.enum_values_list
             for idx in tfi.enum_field_indices:
-                enum_vals = enum_values_cache[idx]
+                amap = tfi.enum_alias_maps[idx]
                 val = final_values[idx]
-                if val is not None:
+                if val is not None and amap is not None:
                     sv = str(val)
-                    if sv not in enum_vals:
-                        msg = f"Value '{sv}' not in enum [{','.join(enum_vals)}] for field '{type_def.fields[idx].name}'"
+                    if sv in amap:
+                        final_values[idx] = amap[sv]
+                    else:
+                        msg = f"Value '{sv}' not in enum for field '{type_def.fields[idx].name}'"
                         if self._allow_constraint_violations == 'error':
                             raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=self._filename)
                         self.result.add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
         else:
             for idx in range(field_count):
-                enum_vals = type_def.get_enum_values(idx)
-                if enum_vals:
+                amap = type_def.get_enum_alias_map(idx)
+                if amap is not None:
                     val = final_values[idx]
                     if val is not None:
                         sv = str(val)
-                        if sv not in enum_vals:
-                            msg = f"Value '{sv}' not in enum [{','.join(enum_vals)}] for field '{type_def.fields[idx].name}'"
+                        if sv in amap:
+                            final_values[idx] = amap[sv]
+                        else:
+                            msg = f"Value '{sv}' not in enum for field '{type_def.fields[idx].name}'"
                             if self._allow_constraint_violations == 'error':
                                 raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=self._filename)
                             self.result.add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
@@ -611,9 +614,11 @@ class RecordParser:
                 val = final_values[idx]
                 if val is not None:
                     sv = str(val)
-                    if sv not in enum_sets[idx]:
-                        enum_vals = tfi.enum_values_list[idx]
-                        msg = f"Value '{sv}' not in enum [{','.join(enum_vals)}] for field '{type_def.fields[idx].name}'"
+                    amap = tfi.enum_alias_maps[idx]
+                    if sv in amap:
+                        final_values[idx] = amap[sv]
+                    else:
+                        msg = f"Value '{sv}' not in enum for field '{type_def.fields[idx].name}'"
                         if _allow_constraint_violations == 'error':
                             raise MaxiError(msg, MaxiErrorCode.ConstraintViolationError, line=line_number, filename=fname)
                         add_warning(msg, code=MaxiErrorCode.ConstraintViolationError, line=line_number)
@@ -1233,7 +1238,7 @@ class _TypeFieldInfo:
 
     __slots__ = (
         "type_exprs", "required_flags", "id_field_index",
-        "enum_field_indices", "enum_values_list", "defaults",
+        "enum_field_indices", "enum_values_list", "enum_alias_maps", "defaults",
         "has_runtime_constraints", "can_fast_parse", "type_field_index",
         "field_kinds", "enum_sets",
     )
@@ -1250,10 +1255,11 @@ class _TypeFieldInfo:
         self.has_runtime_constraints: bool = td.has_runtime_constraints
 
         self.enum_values_list: list[list[str] | None] = [td.get_enum_values(i) for i in range(n)]
-        self.enum_field_indices: list[int] = [i for i in range(n) if self.enum_values_list[i] is not None]
+        self.enum_alias_maps: list[dict | None] = [td.get_enum_alias_map(i) for i in range(n)]
+        self.enum_field_indices: list[int] = [i for i in range(n) if self.enum_alias_maps[i] is not None]
 
         self.enum_sets: list[frozenset[str] | None] = [
-            frozenset(ev) if ev else None for ev in self.enum_values_list
+            frozenset(am.keys()) if am else None for am in self.enum_alias_maps
         ]
 
         self.type_field_index: int = next((i for i, f in enumerate(fields) if f.name == "type"), -1)

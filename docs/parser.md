@@ -627,3 +627,41 @@ order = result.data["O"][0]
 print(isinstance(order.user, User))  # True
 print(order.total)                   # 49.99
 ```
+
+---
+
+### 10. Enum value aliases
+
+Enum fields may use short aliases as wire tokens. The parser always returns the full semantic value.
+
+```python
+from maxi import parse_maxi
+
+input_text = """
+U:User(id:int|name|role:enum[a:admin,e:editor,v:viewer])
+###
+U(1|Alice|a)
+U(2|Bob|v)
+""".strip()
+
+result = await parse_maxi(input_text)
+
+print(result.records[0].values[2])  # 'admin': alias 'a' expanded
+print(result.records[1].values[2])  # 'viewer': alias 'v' expanded
+```
+
+`enum<int>` aliases work the same way — the parsed value is always the integer:
+
+```python
+input_text = """
+D:Device(id:int|name|state:enum<int>[O:900,I:910,R:1000,E:999])
+###
+D(1|sensor-A|R)
+""".strip()
+
+result = await parse_maxi(input_text)
+
+print(result.records[0].values[2])  # 1000: alias 'R' expanded to int
+```
+
+Wire tokens that are neither a declared alias nor the full value trigger a constraint violation (E303).

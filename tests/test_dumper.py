@@ -81,3 +81,67 @@ async def test_dump_from_dict():
     )
     assert "U(" in dumped
     assert "Alice" in dumped
+
+
+@pytest.mark.asyncio
+async def test_dump_enum_alias_emits_alias_from_full_value():
+    """Full value input -> alias on wire."""
+    from maxi.api.dump import dump_maxi
+    users = [{"id": 1, "name": "Alice", "role": "admin"},
+             {"id": 2, "name": "Bob",   "role": "editor"}]
+    result = dump_maxi(users, default_alias="U", types=[{
+        "alias": "U", "name": "User",
+        "fields": [
+            {"name": "id",   "type_expr": "int"},
+            {"name": "name"},
+            {"name": "role", "type_expr": "enum[a:admin,e:editor,v:viewer]"},
+        ],
+    }])
+    assert "U(1|Alice|a)" in result
+    assert "U(2|Bob|e)" in result
+
+
+@pytest.mark.asyncio
+async def test_dump_enum_alias_emits_alias_from_alias_input():
+    """Alias as input -> same alias on wire."""
+    from maxi.api.dump import dump_maxi
+    users = [{"id": 1, "name": "Alice", "role": "a"}]
+    result = dump_maxi(users, default_alias="U", types=[{
+        "alias": "U",
+        "fields": [
+            {"name": "id",   "type_expr": "int"},
+            {"name": "name"},
+            {"name": "role", "type_expr": "enum[a:admin,e:editor]"},
+        ],
+    }])
+    assert "U(1|Alice|a)" in result
+
+
+@pytest.mark.asyncio
+async def test_dump_enum_no_alias_unchanged():
+    """Plain enum (no aliases) is written as-is."""
+    from maxi.api.dump import dump_maxi
+    users = [{"id": 1, "role": "admin"}]
+    result = dump_maxi(users, default_alias="U", types=[{
+        "alias": "U",
+        "fields": [
+            {"name": "id",   "type_expr": "int"},
+            {"name": "role", "type_expr": "enum[admin,user,guest]"},
+        ],
+    }])
+    assert "U(1|admin)" in result
+
+
+@pytest.mark.asyncio
+async def test_dump_enum_int_alias_emits_alias():
+    """enum<int> with alias: integer value input -> alias on wire."""
+    from maxi.api.dump import dump_maxi
+    devices = [{"id": 1, "state": 1000}]
+    result = dump_maxi(devices, default_alias="D", types=[{
+        "alias": "D",
+        "fields": [
+            {"name": "id",    "type_expr": "int"},
+            {"name": "state", "type_expr": "enum<int>[O:900,R:1000,E:999]"},
+        ],
+    }])
+    assert "D(1|R)" in result
