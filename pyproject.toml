@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "maxi"
+name = "maxi-format"
 version = "0.1.0"
 description = "Python library for parsing and dumping MAXI schema + records"
 readme = "README.md"

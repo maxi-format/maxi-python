@@ -7,7 +7,7 @@ Version: `0.1.0`
 ## Install
 
 ```bash
-pip install maxi
+pip install maxi-format
 ```
 
 ## API overview
