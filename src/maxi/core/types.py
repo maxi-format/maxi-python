@@ -8,7 +8,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-
 _MISSING: Any = object()
 
 
@@ -18,6 +17,11 @@ class ParsedConstraint:
 
     type: str
     value: Any = None
+    operator: str | None = None
+    int_min: int | None = None
+    int_max: int | None = None
+    frac_min: int | None = None
+    frac_max: int | None = None
 
 
 @dataclass(slots=True)
@@ -171,6 +175,8 @@ class MaxiSchema:
     version: str = "1.0.0"
     imports: list[str] = field(default_factory=list)
     types: dict[str, MaxiTypeDef] = field(default_factory=dict)
+    _name_to_alias: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+    resolve_type_alias: Any = field(default=None, repr=False, compare=False)
 
     def add_type(self, type_def: MaxiTypeDef) -> None:
         """Register a type definition keyed by its alias."""

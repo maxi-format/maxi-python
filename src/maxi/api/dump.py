@@ -5,12 +5,12 @@ Public dump API – ``dump_maxi`` and ``dump_maxi_auto``.
 from __future__ import annotations
 
 import re
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from maxi.core.types import MaxiParseResult, MaxiRecord, _MISSING
+from maxi.core.types import _MISSING, MaxiParseResult, MaxiRecord
 
 if TYPE_CHECKING:
-    from maxi.core.types import MaxiFieldDef, MaxiSchema, MaxiTypeDef
+    from maxi.core.types import MaxiTypeDef
 
 _NEEDS_QUOTING_RE = re.compile(r'[|()\[\]{}~,:\\"]|^\s|\s$')
 
@@ -469,10 +469,10 @@ def _dump_object_as_record(
                     continue
                 v = obj.get(fn)
             else:
-                if not hasattr(obj, fn):
+                if fn is not None and not hasattr(obj, fn):
                     vals.append("")
                     continue
-                v = getattr(obj, fn, None)
+                v = getattr(obj, fn, None) if fn is not None else None
             if v is None:
                 vals.append("~")
             else:
@@ -556,26 +556,6 @@ def _dump_value(
             for k, v in value.items()
         )
         return f"{{{entries}}}"
-
-    if hasattr(value, "__dict__"):
-        te = _field_attr(field_info, "typeExpr") or _field_attr(field_info, "type_expr")
-        ref_type = re.sub(r"\[\]$", "", te) if te else None
-        nested = all_types.get(ref_type) if ref_type else None
-        if nested:
-            nested_fields = (nested.get("fields") if isinstance(nested, dict) else getattr(nested, "fields", None)) or []
-            id_field = next(
-                (f for f in nested_fields if (f.get("name") if isinstance(f, dict) else getattr(f, "name", None)) == "id"),
-                None,
-            )
-            id_name = (id_field.get("name") if isinstance(id_field, dict) else getattr(id_field, "name", None)) if id_field else None
-            if id_name:
-                id_val = getattr(value, id_name, None)
-                if id_val is not None:
-                    if not collect_refs:
-                        obj_dict = {f_name: getattr(value, f_name, None) for f_name in
-                                    ((f.get("name") if isinstance(f, dict) else getattr(f, "name", None)) for f in nested_fields)}
-                        return _dump_inline_object(obj_dict, nested, all_types, collect_refs)
-                    return _dump_value(id_val, None, all_types, collect_refs)
 
     return str(value)
 

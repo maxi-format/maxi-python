@@ -2,8 +2,6 @@
 
 Python library for parsing and dumping **MAXI schema + records**.
 
-Version: `0.1.0`
-
 ## Install
 
 ```bash

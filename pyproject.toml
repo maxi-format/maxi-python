@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "maxi-format"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python library for parsing and dumping MAXI schema + records"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -30,10 +30,31 @@ Issues = "https://github.com/maxi-format/maxi-python/issues"
 Changelog = "https://github.com/maxi-format/maxi-python/releases"
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "pytest-asyncio>=0.21"]
+dev = ["pytest>=7", "pytest-asyncio>=0.21", "ruff>=0.4", "mypy>=1.10"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/maxi"]
+
+[tool.ruff]
+src = ["src"]
+line-length = 155
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_unused_ignores = true
+warn_return_any = false
+check_untyped_defs = true
+mypy_path = "src"
+exclude = ["tests/"]
+
+[[tool.mypy.overrides]]
+module = "maxi.*"
+disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -5,12 +5,13 @@ Public parse API – ``parse_maxi``, ``parse_maxi_as``, ``parse_maxi_auto_as``.
 from __future__ import annotations
 
 import re
-from typing import Any, Awaitable, Callable, TYPE_CHECKING
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
-from maxi.core.types import MaxiParseResult, MaxiHydrateResult
-from maxi.internal.schema_parser import SchemaParser
+from maxi.core.types import MaxiHydrateResult, MaxiParseResult
 from maxi.internal.record_parser import RecordParser
 from maxi.internal.reference_resolver import build_object_registry, validate_references
+from maxi.internal.schema_parser import SchemaParser
 
 if TYPE_CHECKING:
     from maxi.core.types import MaxiSchema, MaxiTypeDef
@@ -193,9 +194,10 @@ def _hydrate_result(result: MaxiParseResult, class_map: dict[str, type]) -> Maxi
     instance_registry: dict[str, dict[str, Any]] = {}
 
     for record in result.records:
-        cls = class_map.get(record.alias)
-        if cls is None:
+        cls_val: type | None = class_map.get(record.alias)
+        if cls_val is None:
             continue
+        cls = cls_val
 
         td = schema_by_alias.get(record.alias)
         field_map = _record_to_field_map(record, td)

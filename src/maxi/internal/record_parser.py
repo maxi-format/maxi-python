@@ -5,11 +5,11 @@ Record phase parser – parse data records after the ``###`` separator.
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation
-from typing import Any, TYPE_CHECKING
+from decimal import InvalidOperation
+from typing import TYPE_CHECKING, Any
 
 from maxi.core.errors import MaxiError, MaxiErrorCode
-from maxi.core.types import MaxiRecord, _MISSING
+from maxi.core.types import _MISSING, MaxiRecord
 from maxi.internal.constraint_validator import validate_record_constraints
 
 if TYPE_CHECKING:
@@ -407,7 +407,7 @@ class RecordParser:
                 if seen is None:
                     seen = set()
                     self.seen_ids[alias] = seen
-                id_key = id_val if isinstance(id_val, (int, str, float)) else str(id_val)
+                id_key = str(id_val)
                 if id_key in seen:
                     msg = f"Duplicate identifier '{id_val}' for type '{alias}'"
                     if self._allow_constraint_violations == 'error':
@@ -433,7 +433,6 @@ class RecordParser:
         req_flags = tfi.required_flags
         id_idx = tfi.id_field_index
         enum_field_indices = tfi.enum_field_indices
-        enum_sets = tfi.enum_sets
         defaults = tfi.defaults
         has_type_field = tfi.type_field_index
 
@@ -615,7 +614,9 @@ class RecordParser:
                 if val is not None:
                     sv = str(val)
                     amap = tfi.enum_alias_maps[idx]
-                    if sv in amap:
+                    if amap is None:
+                        pass
+                    elif sv in amap:
                         final_values[idx] = amap[sv]
                     else:
                         msg = f"Value '{sv}' not in enum for field '{type_def.fields[idx].name}'"
@@ -633,7 +634,7 @@ class RecordParser:
                 if seen is None:
                     seen = set()
                     self.seen_ids[alias] = seen
-                id_key = id_val if isinstance(id_val, (int, str, float)) else str(id_val)
+                id_key = str(id_val)
                 if id_key in seen:
                     msg = f"Duplicate identifier '{id_val}' for type '{alias}'"
                     if _allow_constraint_violations == 'error':
@@ -1018,7 +1019,7 @@ class RecordParser:
             except ValueError:
                 continue
             if isinstance(value, str):
-                actual = len(value)
+                actual: int | float = len(value)
             elif isinstance(value, (int, float)):
                 actual = value
             else:

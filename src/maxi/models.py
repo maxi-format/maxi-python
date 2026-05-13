@@ -338,6 +338,8 @@ class RefField(_FieldBase):
 class MaxiModel:
     """Declarative base class for MAXI schema definitions."""
 
+    __maxi_schema__: dict[str, Any]
+
     def __init_subclass__(
         cls,
         *,
@@ -365,7 +367,7 @@ class MaxiModel:
             for base in cls.__mro__[1:]:
                 if base is MaxiModel or base is cls:
                     continue
-                if hasattr(base, "__maxi_schema__") and isinstance(getattr(base, "__maxi_schema__"), dict):
+                if hasattr(base, "__maxi_schema__") and isinstance(base.__maxi_schema__, dict):
                     parents.append(base.__maxi_schema__["alias"])
 
         # Build schema descriptor

@@ -7,7 +7,6 @@ from __future__ import annotations
 import weakref
 from typing import Any
 
-
 _registry: dict[int, tuple[weakref.ref, dict[str, Any]]] = {}
 
 

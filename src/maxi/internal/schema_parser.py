@@ -4,10 +4,9 @@ Schema phase parser – directives, type definitions, imports.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import re
-from typing import Any, Awaitable, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from maxi.core.errors import MaxiError, MaxiErrorCode
 from maxi.core.types import MaxiFieldDef, MaxiTypeDef, ParsedConstraint
@@ -40,7 +39,7 @@ class SchemaParser:
             return
 
         lines = self.schema_text.split("\n")
-        lines = [l.rstrip("\r") for l in lines]
+        lines = [line.rstrip("\r") for line in lines]
         line_number = 1
 
         i = 0
@@ -555,14 +554,13 @@ class SchemaParser:
                 op = m.group(1)
                 val_str = m.group(2).strip()
                 try:
-                    num_val: int | float = int(val_str)
+                    num_val: int | float | str = int(val_str)
                 except ValueError:
                     try:
                         num_val = float(val_str)
                     except ValueError:
                         num_val = val_str
-                c = ParsedConstraint(type="comparison", value=num_val if isinstance(num_val, (int, float)) else val_str)
-                c.operator = op
+                c = ParsedConstraint(type="comparison", operator=op, value=num_val if isinstance(num_val, (int, float)) else val_str)
                 constraints.append(c)
                 continue
 
@@ -577,7 +575,7 @@ class SchemaParser:
                         line=line_number,
                         filename=self.options.get("filename"),
                         cause=exc,
-                    )
+                    ) from exc
                 constraints.append(ParsedConstraint(type="pattern", value=pattern))
                 continue
 
@@ -733,11 +731,9 @@ class SchemaParser:
             else:
                 frac_max = int(frac_part)
 
-        c = ParsedConstraint(type="decimal-precision", value=raw)
-        c.int_min = int_min
-        c.int_max = int_max
-        c.frac_min = frac_min
-        c.frac_max = frac_max
+        c = ParsedConstraint(type="decimal-precision", value=raw,
+                              int_min=int_min, int_max=int_max,
+                              frac_min=frac_min, frac_max=frac_max)
         return c
 
     @staticmethod
@@ -821,12 +817,12 @@ class SchemaParser:
                 elif te in ("float", "decimal"):
                     try:
                         float(dv)
-                    except ValueError:
+                    except ValueError as exc:
                         raise MaxiError(
                             f"Invalid default value '{field.default_value}' for field '{field.name}' of type '{te}' in '{alias}'",
                             MaxiErrorCode.InvalidDefaultValueError,
                             filename=self.options.get("filename"),
-                        )
+                        ) from exc
                 elif te == "bool":
                     if dv not in ("true", "false", "1", "0"):
                         raise MaxiError(
@@ -932,6 +928,6 @@ class SchemaParser:
                 line=line_number,
                 filename=self.options.get("filename"),
                 cause=exc,
-            )
+            ) from exc
         finally:
             self.loading_stack.discard(path_or_url)

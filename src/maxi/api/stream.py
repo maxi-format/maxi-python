@@ -7,13 +7,14 @@ iterator.
 
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Awaitable, Callable, TYPE_CHECKING
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
+from maxi.api.parse import _split_sections
 from maxi.core.errors import MaxiError, MaxiErrorCode
 from maxi.core.types import MaxiParseResult, MaxiRecord
-from maxi.internal.schema_parser import SchemaParser
 from maxi.internal.record_parser import RecordParser
-from maxi.api.parse import _split_sections
+from maxi.internal.schema_parser import SchemaParser
 
 if TYPE_CHECKING:
     from maxi.core.types import MaxiSchema
