@@ -86,8 +86,10 @@ class SchemaParser:
         name = m.group(1)
         value = m.group(2).strip()
 
-        if name == "version":
+        if name == "maxi":
             self._parse_version_directive(value, line_number)
+        elif name == "version":
+            self.result.schema.user_version = value
         elif name == "schema":
             await self._parse_schema_directive(value, line_number)
         else:
@@ -112,7 +114,7 @@ class SchemaParser:
                 line=line_number,
                 filename=self.options.get("filename"),
             )
-        self.result.schema.version = value
+        self.result.schema.maxi_version = value
 
 
     async def _parse_schema_directive(self, path_or_url: str, line_number: int) -> None:

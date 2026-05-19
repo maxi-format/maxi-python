@@ -294,6 +294,121 @@ async def test_valid_case(case):
             f"expected {expected_value!r}, got {actual!r}"
         )
 
+    for sv in expected.get("schema_validations", []):
+        path = sv["path"]
+        expected_value = sv["expected_value"]
+        actual = _resolve_schema_path(result.schema, path)
+        assert actual == expected_value, (
+            f"[{case['id']}] {sv.get('description', path)}: "
+            f"expected {expected_value!r}, got {actual!r}"
+        )
+
+
+def _resolve_schema_path(schema, pointer):
+    """Resolve a #/schema/... path against a MaxiSchema object.
+
+    Supports flat fields (#/schema/userVersion) and deeply nested type paths.
+    camelCase JSON path keys are translated to snake_case Python attribute names.
+    """
+    if not pointer.startswith("#/schema/"):
+        raise ValueError(f"schema_validations path must start with #/schema/ - got: {pointer}")
+    parts = pointer[len("#/schema/"):].split("/")
+
+    _C = {
+        "userVersion": "user_version", "maxiVersion": "maxi_version",
+        "typeExpr": "type_expr", "defaultValue": "default_value",
+        "elementConstraints": "element_constraints", "isRequired": "is_required",
+        "fracMax": "frac_max", "fracMin": "frac_min",
+        "intMax": "int_max", "intMin": "int_min",
+    }
+
+    def s(seg):
+        return _C.get(seg, seg)
+
+    # Flat schema field
+    if parts[0] != "types":
+        cur = schema
+        for seg in parts:
+            if cur is None:
+                return None
+            cur = getattr(cur, s(seg), None) if not isinstance(cur, dict) else cur.get(s(seg))
+        return cur
+
+    # #/schema/types/<alias>/...
+    if len(parts) < 2:
+        return None
+    td = schema.get_type(parts[1])
+    if td is None:
+        return None
+    if len(parts) == 2:
+        return td
+
+    seg2 = parts[2]
+
+    # identifierField
+    if seg2 == "identifierField":
+        id_field = td.get_id_field()
+        return id_field.name if id_field else None
+
+    # Not going into fields
+    if seg2 != "fields" or len(parts) < 4:
+        return getattr(td, s(seg2), None)
+
+    # #/schema/types/<a>/fields/<N>/...
+    if not parts[3].isdigit():
+        return None
+    field_idx = int(parts[3])
+    if field_idx >= len(td.fields):
+        return None
+    fd = td.fields[field_idx]
+
+    if len(parts) == 4:
+        return fd
+
+    seg4 = parts[4]
+
+    # enumValues/<M>
+    if seg4 == "enumValues":
+        enum_vals = td.get_enum_values(field_idx) if hasattr(td, "get_enum_values") else None
+        if len(parts) == 5:
+            return enum_vals
+        if enum_vals is None:
+            return None
+        sub_idx = int(parts[5]) if parts[5].isdigit() else None
+        return enum_vals[sub_idx] if sub_idx is not None and sub_idx < len(enum_vals) else None
+
+    # constraints or elementConstraints
+    if seg4 in ("constraints", "elementConstraints", "element_constraints"):
+        constraints = getattr(fd, s(seg4)) or None
+        if len(parts) == 5:
+            return constraints
+        key = parts[5]
+        if key.isdigit():
+            c_obj = constraints[int(key)] if constraints and int(key) < len(constraints) else None
+            if len(parts) == 6:
+                return c_obj
+            return getattr(c_obj, s(parts[6]), None) if c_obj is not None else None
+        # Named lookup
+        if not constraints:
+            return None
+        if key == "minVal":
+            found = next((c for c in constraints if getattr(c, "type", None) == "comparison" and getattr(c, "operator", None) == ">="), None)
+            return getattr(found, "value", None) if found else None
+        if key == "maxVal":
+            found = next((c for c in constraints if getattr(c, "type", None) == "comparison" and getattr(c, "operator", None) == "<="), None)
+            return getattr(found, "value", None) if found else None
+        if key == "mime":
+            found = next((c for c in constraints if getattr(c, "type", None) == "mime"), None)
+            if found is None:
+                return None
+            val = getattr(found, "value", None)
+            return val[0] if isinstance(val, list) and len(val) == 1 else val
+        found = next((c for c in constraints if getattr(c, "type", None) == key), None)
+        return getattr(found, "value", found) if found else None
+
+    # Simple field attribute
+    return getattr(fd, s(seg4), None)
+
 
 
 @pytest.mark.asyncio
@@ -304,7 +419,6 @@ async def test_valid_case(case):
 )
 async def test_error_case(case):
     """Parse a MAXI document that should raise MaxiError."""
-    # Convert camelCase parserOptions to snake_case kwargs
     opts = case.get("parser_options", {})
     kwargs = {}
     for k, v in opts.items():
@@ -325,7 +439,6 @@ async def test_error_case(case):
 )
 async def test_warning_case(case):
     """Parse a MAXI document and check warnings are produced (no exception)."""
-    # Convert camelCase parserOptions to snake_case kwargs
     opts = case.get("parser_options", {})
     kwargs = {}
     for k, v in opts.items():

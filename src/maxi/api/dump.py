@@ -121,8 +121,10 @@ def _dump_from_parse_result(
     out: list[str] = []
 
     schema = result.schema
-    if schema.version and schema.version != "1.0.0":
-        out.append(f"@version:{schema.version}")
+    if schema.maxi_version and schema.maxi_version != "1.0.0":
+        out.append(f"@maxi:{schema.maxi_version}")
+    if schema.user_version:
+        out.append(f"@version:{schema.user_version}")
     for imp in schema.imports:
         out.append(f"@schema:{imp}")
 
@@ -157,7 +159,10 @@ def _dump_from_objects(
 
     v = schema.get("version")
     if v and v != "1.0.0":
-        out.append(f"@version:{v}")
+        out.append(f"@maxi:{v}")
+    uv = schema.get("user_version")
+    if uv:
+        out.append(f"@version:{uv}")
     for imp in schema.get("imports") or []:
         out.append(f"@schema:{imp}")
 

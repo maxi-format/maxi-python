@@ -29,7 +29,7 @@ maxi = dump_maxi(data, default_alias="U", types=[...])
 
 `dump_maxi` accepts data in several formats and optional configuration directly as keyword arguments. It emits a MAXI string that may contain:
 
-- Directives (`@version`, `@schema`)
+- Directives (`@maxi`, `@version`, `@schema`)
 - Type definitions (schema section)
 - A `###` separator
 - Records (data section)
@@ -267,7 +267,8 @@ This resolution happens once at the start of `dump_maxi` via `_resolve_inheritan
 | `types` | `list \| dict` | — | Type definitions used for field order, type defs, and references |
 | `include_types` | `bool` | `True` | Whether to emit type definitions above `###` |
 | `schema_file` | `str` | — | Emit `@schema:<path>` import directive |
-| `version` | `str` | — | Emit `@version:<x>` if not `1.0.0` |
+| `version` | `str` | — | Emit `@maxi:<x>` (parser-compat version) |
+| `user_version` | `str` | — | Emit `@version:<x>` (user API/schema version) |
 | `multiline` | `bool` | `False` | Pretty-print type defs and records across multiple lines |
 | `collect_references` | `bool` | `True` | Promote nested typed objects with an `id` into top-level records |
 

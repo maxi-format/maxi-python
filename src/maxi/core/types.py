@@ -122,6 +122,8 @@ class MaxiTypeDef:
                         else:
                             alias = token
                             full_str = token
+                        if not is_int and len(full_str) >= 2 and full_str[0] == '"' and full_str[-1] == '"':
+                            full_str = full_str[1:-1]
                         full_val: Any = int(full_str) if is_int else full_str
                         amap[alias] = full_val
                         if alias != full_str:
@@ -172,7 +174,8 @@ class MaxiTypeDef:
 class MaxiSchema:
     """Top-level schema object aggregating version, imports, and types."""
 
-    version: str = "1.0.0"
+    maxi_version: str = "1.0.0"
+    user_version: str | None = None
     imports: list[str] = field(default_factory=list)
     types: dict[str, MaxiTypeDef] = field(default_factory=dict)
     _name_to_alias: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
