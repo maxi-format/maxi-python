@@ -21,7 +21,7 @@ def _make_schema_loader(case_dir):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "case",
-    VALID_CASES[:20],  # first 20 to keep test time reasonable
+    VALID_CASES[:20],
     ids=[c["id"] for c in VALID_CASES[:20]],
 )
 async def test_round_trip(case):
@@ -145,3 +145,95 @@ async def test_dump_enum_int_alias_emits_alias():
         ],
     }])
     assert "D(1|R)" in result
+
+
+def test_dump_null_with_default_emits_tilde():
+    """null on a field that has a declared default must emit ~.
+
+    The parser must distinguish 'absent (use default)' from 'explicitly null';
+    ~ is the wire token for the latter.
+    """
+    from maxi.api.dump import dump_maxi
+    types = [{
+        "alias": "U",
+        "fields": [
+            {"name": "id",    "typeExpr": "int"},
+            {"name": "name"},
+            {"name": "email", "typeExpr": "str", "defaultValue": "unknown"},
+        ],
+    }]
+    result = dump_maxi(
+        [{"id": 1, "name": "Alice"},
+         {"id": 2, "name": "Bob", "email": None}],
+        default_alias="U", types=types, include_types=False,
+    )
+    lines = result.strip().split("\n")
+    assert lines[0] == "U(1|Alice)",  f"absent trailing field should be stripped, got: {lines[0]!r}"
+    assert lines[1] == "U(2|Bob|~)",  f"null on field-with-default must emit ~, got: {lines[1]!r}"
+
+
+def test_dump_null_without_default_omitted_like_absent():
+    """null on a field without a default is indistinguishable from absent.
+
+    When trailing, it must be stripped just like a missing key.
+    """
+    from maxi.api.dump import dump_maxi
+    types = [{
+        "alias": "U",
+        "fields": [
+            {"name": "id",   "typeExpr": "int"},
+            {"name": "name"},
+            {"name": "note"},
+        ],
+    }]
+    result = dump_maxi(
+        [{"id": 1, "name": "Alice", "note": None}],
+        default_alias="U", types=types, include_types=False,
+    )
+    assert result.strip() == "U(1|Alice)", (
+        f"trailing null-without-default should be stripped, got: {result.strip()!r}"
+    )
+
+
+def test_dump_trailing_tilde_preserved():
+    """A trailing ~ must never be stripped — it is semantically meaningful."""
+    from maxi.api.dump import dump_maxi
+    types = [{
+        "alias": "U",
+        "fields": [
+            {"name": "id",    "typeExpr": "int"},
+            {"name": "email", "typeExpr": "str", "defaultValue": "unknown"},
+        ],
+    }]
+    result = dump_maxi(
+        [{"id": 1, "email": None}],
+        default_alias="U", types=types, include_types=False,
+    )
+    assert result.strip() == "U(1|~)", (
+        f"trailing ~ must be preserved, got: {result.strip()!r}"
+    )
+
+
+def test_dump_multiple_trailing_empties_stripped():
+    """Several consecutive trailing absent/null-without-default fields must all be stripped."""
+    from maxi.api.dump import dump_maxi
+    types = [{
+        "alias": "U",
+        "fields": [
+            {"name": "id",    "typeExpr": "int"},
+            {"name": "name"},
+            {"name": "note"},
+            {"name": "extra"},
+            {"name": "tag"},
+        ],
+    }]
+    result = dump_maxi(
+        [
+            {"id": 1, "name": "Alice"},
+            {"id": 2, "name": "Bob", "note": None, "extra": None, "tag": None},
+        ],
+        default_alias="U", types=types, include_types=False,
+    )
+    lines = result.strip().split("\n")
+    assert lines[0] == "U(1|Alice)", f"three absent trailing fields should be stripped, got: {lines[0]!r}"
+    assert lines[1] == "U(2|Bob)",   f"three null-without-default trailing fields should be stripped, got: {lines[1]!r}"

@@ -202,7 +202,8 @@ def _dump_from_objects(
                         continue
                     v = obj[fn]
                     if v is None:
-                        vals.append("~")
+                        _dv = f.get("defaultValue", _MISSING) if isinstance(f, dict) else getattr(f, "default_value", _MISSING)
+                        vals.append("~" if _dv is not _MISSING else "")
                     elif isinstance(v, bool):
                         vals.append("1" if v else "0")
                     elif isinstance(v, (int, float)):
@@ -479,7 +480,8 @@ def _dump_object_as_record(
                     continue
                 v = getattr(obj, fn, None) if fn is not None else None
             if v is None:
-                vals.append("~")
+                _dv = f.get("defaultValue", _MISSING) if isinstance(f, dict) else getattr(f, "default_value", _MISSING)
+                vals.append("~" if _dv is not _MISSING else "")
             else:
                 vals.append(_dump_value(v, f, all_types, collect_refs))
     else:
@@ -580,7 +582,8 @@ def _dump_inline_object(
             continue
         v = obj.get(fn)
         if v is None:
-            vals.append("~")
+            _dv = f.get("defaultValue", _MISSING) if isinstance(f, dict) else getattr(f, "default_value", _MISSING)
+            vals.append("~" if _dv is not _MISSING else "")
         else:
             vals.append(_dump_value(v, f, all_types, collect_refs))
 
